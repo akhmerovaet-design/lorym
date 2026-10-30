@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, AudioLines, Check, LayoutTemplate, ListTodo, Menu, NotebookText, Plus, Search, Upload, X } from "lucide-react";
+import { ArrowRight, AudioLines, Check, LayoutTemplate, ListTodo, Menu, Plus, Search, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,13 +14,12 @@ import { TasksBoard } from "@/TasksBoard";
 import { SpaceFilter } from "@/SpaceFilter";
 import { SpaceLibrary } from "@/SpaceLibrary";
 import { RecordingsPage } from "@/RecordingsPage";
-import { NotesPage } from "@/NotesPage";
-import { folderPath, type FolderInfo, type Kind, type Material, type TemplateInfo } from "@/model";
+import { type FolderInfo, type Kind, type Material, type TemplateInfo } from "@/model";
 import { defaultSpaceColor, type SpaceColor } from "@/spaceColors";
 import { searchableMaterialText } from "@/materialSearch";
 import { deleteFile, saveFile } from "@/fileStorage";
 
-type View = "home" | "spaces" | "overview" | "materials" | "meetings" | "notes" | "note-editor" | "file-preview" | "topics" | "templates" | "tasks";
+type View = "home" | "spaces" | "overview" | "materials" | "meetings" | "note-editor" | "file-preview" | "topics" | "templates" | "tasks";
 type NavigationSnapshot = { view: View; space: string; folderId: string | null; spaceFilter: string; query: string; topic: string; filter: "all" | Kind; activeMeetingId: number | null; activeFileId: number | null; editingNoteId: number | null; noteReturnMeetingId: number | null };
 type Breadcrumb = { key: string; label: string; onClick: () => void };
 
@@ -41,7 +40,7 @@ const initialFolders: FolderInfo[] = [
   { id: "personal-plans", space: "Личное", name: "Планы", parentId: null },
 ];
 
-const viewNames: Record<View, string> = { home: "Главная", spaces: "Все пространства", overview: "Обзор", materials: "Материалы", meetings: "Записи", notes: "База знаний", "note-editor": "Редактор документа", "file-preview": "Файл", topics: "Темы", templates: "Шаблоны", tasks: "Задачи" };
+const viewNames: Record<View, string> = { home: "Главная", spaces: "Мои пространства", overview: "Обзор", materials: "Материалы", meetings: "Записи", "note-editor": "Редактор документа", "file-preview": "Файл", topics: "Темы", templates: "Шаблоны", tasks: "Задачи" };
 const initialSpaces: SpaceInfo[] = [
   { name: "Рабочее", kind: "personal", cover: "work", coverImage: "/covers/work-editorial.jpg", access: "edit", color: "rose" },
   { name: "Личное", kind: "personal", cover: "personal", access: "edit", color: "sage" },
@@ -81,6 +80,13 @@ function linkedSpace() {
   }
 }
 
+function linkedRecordingId() {
+  const value = new URLSearchParams(window.location.search).get("recording");
+  if (value === null) return null;
+  const id = Number(value);
+  return value && Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 function firstActiveSpace() {
   try {
     const saved = JSON.parse(localStorage.getItem("lorym-prototype-spaces") ?? "null") as SpaceInfo[] | null;
@@ -90,7 +96,7 @@ function firstActiveSpace() {
 
 function App() {
   const [space, setSpace] = useState(() => linkedSpace() ?? firstActiveSpace());
-  const [view, setView] = useState<View>(() => linkedSpace() ? "overview" : firstActiveSpace() ? "home" : "spaces");
+  const [view, setView] = useState<View>(() => linkedRecordingId() ? "meetings" : linkedSpace() ? "overview" : firstActiveSpace() ? "home" : "spaces");
   const [folderId, setFolderId] = useState<string | null>(null);
   const [navigationHistory, setNavigationHistory] = useState<NavigationSnapshot[]>([]);
   const [spaceFilter, setSpaceFilter] = useState("all");
@@ -120,7 +126,7 @@ function App() {
     } catch { return seed; }
   });
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
-  const [activeMeetingId, setActiveMeetingId] = useState<number | null>(null);
+  const [activeMeetingId, setActiveMeetingId] = useState<number | null>(() => linkedRecordingId());
   const [activeFileId, setActiveFileId] = useState<number | null>(null);
   const [noteReturnMeetingId, setNoteReturnMeetingId] = useState<number | null>(null);
   const [allSpaces, setAllSpaces] = useState<SpaceInfo[]>(() => {
@@ -189,13 +195,13 @@ function App() {
   const defaultEditableSpace = canEditSpace ? space : spaces.find((item) => item.access === "edit")?.name ?? "";
   const editingNote = materials.find((item) => item.id === editingNoteId && item.kind === "note");
   const activeFile = materials.find((item) => item.id === activeFileId && item.kind === "file");
-  const globalList = ["materials", "meetings", "notes", "topics"].includes(view);
+  const globalList = ["materials", "meetings", "topics"].includes(view);
   const createSpace = globalList && spaceFilter !== "all" ? spaceFilter : space;
   const canCreateMaterial = spaces.some((item) => item.name === createSpace && item.access === "edit");
   const listSource = globalList ? materials.filter((item) => spaces.some((target) => target.name === item.space) && (spaceFilter === "all" || item.space === spaceFilter)) : scoped;
   const topics = Array.from(new Set(listSource.map((item) => item.topic).filter((value) => value !== "Без темы")));
   const visible = listSource.filter((item) => {
-    const matchesView = view === "meetings" ? item.kind === "meeting" : view === "notes" ? item.kind === "note" : true;
+    const matchesView = view === "meetings" ? item.kind === "meeting" : true;
     const matchesKind = filter === "all" || item.kind === filter;
     const matchesTopic = !topic || item.topic === topic;
     return matchesView && matchesKind && matchesTopic && searchableMaterialText(item).includes(query.toLocaleLowerCase("ru").trim());
@@ -253,12 +259,12 @@ function App() {
     } else if (view === "overview" && folderId) setFolderId(null);
     else if (view === "overview") setView("spaces");
     else if (view === "file-preview") setView("overview");
-    else if (view === "note-editor") setView("notes");
+    else if (view === "note-editor") setView("overview");
     else setView("home");
     setMobileNav(false);
     window.scrollTo(0, 0);
   }
-  function openCollection(next: "materials" | "meetings" | "notes" | "templates" | "tasks") {
+  function openCollection(next: "materials" | "meetings" | "templates" | "tasks") {
     setSpaceFilter("all");
     if (next === "meetings") setActiveMeetingId(null);
     changeView(next);
@@ -534,6 +540,7 @@ function App() {
     setSpaceFilter("all");
     changeView("meetings", view === "meetings");
   }
+  function openKnowledgeNote(note: Material) { openDetail(note); }
   function openGlobalMaterial(id: number) {
     const item = materials.find((candidate) => candidate.id === id);
     if (!item) return;
@@ -653,7 +660,7 @@ function App() {
 
   const breadcrumbs: Breadcrumb[] = [{ key: "home", label: "Главная", onClick: () => view === "home" ? window.scrollTo(0, 0) : changeView("home") }];
   function addSpaceBreadcrumbs(name: string, targetFolderId: string | null) {
-    breadcrumbs.push({ key: "spaces", label: "Пространства", onClick: () => changeView("spaces") });
+    breadcrumbs.push({ key: "spaces", label: "Мои пространства", onClick: () => changeView("spaces") });
     breadcrumbs.push({ key: `space-${name}`, label: name, onClick: () => openSpaceFolder(name, null) });
     const chain: FolderInfo[] = [];
     const seen = new Set<string>();
@@ -665,7 +672,7 @@ function App() {
     }
     chain.forEach((folder) => breadcrumbs.push({ key: `folder-${folder.id}`, label: folder.name, onClick: () => openSpaceFolder(name, folder.id) }));
   }
-  if (view === "spaces") breadcrumbs.push({ key: "spaces", label: "Пространства", onClick: () => window.scrollTo(0, 0) });
+  if (view === "spaces") breadcrumbs.push({ key: "spaces", label: "Мои пространства", onClick: () => window.scrollTo(0, 0) });
   else if (view === "overview") addSpaceBreadcrumbs(space, folderId);
   else if (view === "file-preview" && activeFile) {
     addSpaceBreadcrumbs(activeFile.space, activeFile.folderId ?? null);
@@ -689,7 +696,6 @@ function App() {
         <SpaceTree spaces={spaces} currentSpace={space} isSpaceView={["overview", "note-editor", "file-preview"].includes(view)} isCatalogView={view === "spaces"} onNavigate={openSpace} onOpenCatalog={() => changeView("spaces")} onAdd={startSpaceCreation} onDropMaterial={requestMove} />
         <div className="sidebar-nav-gap" />
         <button className={`nav-item nav-item-with-icon ${view === "meetings" ? "active" : ""}`} onClick={() => openCollection("meetings")}><AudioLines size={18} strokeWidth={1.7} aria-hidden="true" />Записи</button>
-        <button className={`nav-item nav-item-with-icon ${view === "notes" ? "active" : ""}`} onClick={() => openCollection("notes")}><NotebookText size={18} strokeWidth={1.7} aria-hidden="true" />База знаний</button>
         <button className={`nav-item nav-item-with-icon ${view === "templates" ? "active" : ""}`} onClick={() => openCollection("templates")}><LayoutTemplate size={18} strokeWidth={1.7} aria-hidden="true" />Шаблоны</button>
         <button className={`nav-item nav-item-with-icon ${view === "tasks" ? "active" : ""}`} onClick={() => openCollection("tasks")}><ListTodo size={18} strokeWidth={1.7} aria-hidden="true" />Задачи</button>
       </nav>
@@ -700,7 +706,7 @@ function App() {
     <div className={`workspace ${view === "spaces" ? "catalog-workspace" : ""} ${view === "note-editor" ? "note-workspace" : ""}`}>
       <header className="topbar">
         <button className="menu-button" aria-label="Открыть меню" onClick={() => setMobileNav(true)}><Menu size={21} /></button>
-        <span className="top-location">{["spaces", "home", "materials", "meetings", "notes", "templates", "tasks", "topics"].includes(view) ? viewNames[view] : <>{space}<span className="slash">/</span>{viewNames[view]}</>}</span>
+        <span className="top-location">{["spaces", "home", "materials", "meetings", "templates", "tasks", "topics"].includes(view) ? viewNames[view] : <>{space}<span className="slash">/</span>{viewNames[view]}</>}</span>
         <div className="top-actions">{view !== "spaces" && view !== "home" && view !== "templates" && view !== "note-editor" && <button className="top-search" aria-label="Перейти к поиску" onClick={() => searchRef.current?.focus()}><Search size={18} /></button>}<span className="top-avatar">Э</span></div>
       </header>
 
@@ -714,7 +720,6 @@ function App() {
           onChooseSpace={() => { changeView("spaces"); notify("Выберите пространство, которое можно редактировать"); }}
           onOpenSpaces={() => changeView("spaces")}
           onOpenMeetings={() => openCollection("meetings")}
-          onOpenNotes={() => openCollection("notes")}
           onOpenTemplates={() => openCollection("templates")}
           onOpenTasks={() => openCollection("tasks")}
           onOpenExampleMeeting={() => openDetail(materials.find((item) => item.id === 1 && item.kind === "meeting") ?? materials.find((item) => item.kind === "meeting")!)}
@@ -736,26 +741,16 @@ function App() {
           onNewNote={(folderId) => createNote("Новый документ", space, [], folderId)}
           onAddFolder={addFolder} onRenameFolder={renameFolder} onDeleteFolder={deleteFolder}
           onMoveToFolder={moveToFolder} onChangeCover={changeCover} onChangeColor={changeSpaceColor}
-          onOpenKnowledge={() => { setSpaceFilter(space); changeView("notes"); }}
           onOpenTemplates={() => openCollection("templates")}
         /> : view === "meetings" ? <RecordingsPage
           meetings={materials.filter((item) => item.kind === "meeting" && spaces.some((target) => target.name === item.space))}
           notes={materials.filter((item) => item.kind === "note" && spaces.some((target) => target.name === item.space))}
           spaces={spaces} templates={savedTemplates} spaceFilter={spaceFilter} onSpaceFilter={setSpaceFilter}
           focusedMeetingId={activeMeetingId} onAddRecording={(target) => openCreate("file", target || space)}
-          onOpenNote={(note, meetingId) => openDetail(note, meetingId)} onAddSummary={addSummary}
+          onOpenKnowledgeNote={openKnowledgeNote} onAddSummary={addSummary}
           onRenameNote={renameNote} onRegenerateNote={regenerateNote} onDeleteNote={deleteNote}
           onDeleteRecording={deleteRecording}
           onCreateTemplate={createTemplateFromRecording} searchRef={searchRef}
-        /> : view === "notes" ? <NotesPage
-          notes={materials.filter((item) => item.kind === "note" && spaces.some((target) => target.name === item.space))}
-          meetings={materials.filter((item) => item.kind === "meeting" && spaces.some((target) => target.name === item.space))}
-          files={materials.filter((item) => item.kind === "file" && spaces.some((target) => target.name === item.space))}
-          folders={folders} templates={savedTemplates}
-          spaces={spaces} spaceFilter={spaceFilter} onSpaceFilter={setSpaceFilter}
-          onCreateDigest={(target, sourceIds) => createNote("Новый конспект", target, sourceIds)}
-          onOpenNote={(note) => openDetail(note)} onOpenMeeting={(meeting) => openDetail(meeting)} onOpenFile={(file) => openDetail(file)} searchRef={searchRef}
-          onRenameNote={renameNote} onRegenerateNote={regenerateNote} onDeleteNote={deleteNote} onCreateTemplate={createTemplateFromRecording}
         /> : view === "note-editor" && editingNote ? <NoteEditor
           key={editingNote.id} note={editingNote} spaceColor={spaces.find((item) => item.name === editingNote.space)?.color}
           meetings={materials.filter((item) => item.kind === "meeting" && item.space === editingNote.space)}
@@ -767,7 +762,7 @@ function App() {
           <h1>{viewNames[view]}</h1>
           {(view === "templates" || (view !== "tasks" && (globalList ? canCreateMaterial : canEditSpace))) && <button className="add-button" onClick={() => { if (view === "templates") openTemplate(); else openCreate("file", createSpace); }}><Plus size={18} />{view === "templates" ? "Новый шаблон" : "Добавить запись"}</button>}
         </div>
-        {["materials", "meetings", "notes", "templates", "tasks", "topics"].includes(view) && <SpaceFilter spaces={spaces} value={spaceFilter} onChange={(name) => { setSpaceFilter(name); setTopic(""); }} label={view === "templates" ? "Доступны в" : "Пространство"} />}
+        {["materials", "meetings", "templates", "tasks", "topics"].includes(view) && <SpaceFilter spaces={spaces} value={spaceFilter} onChange={(name) => { setSpaceFilter(name); setTopic(""); }} label={view === "templates" ? "Доступны в" : "Пространство"} />}
 
         {view === "tasks" ? <TasksBoard spaces={spaces} spaceFilter={spaceFilter} /> : view !== "templates" && <>
           <div className="search-bar"><Search size={20} /><Input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти во встречах, документах и вложениях" aria-label={globalList ? "Поиск по материалам" : "Поиск по пространству"} />{query && <button onClick={() => setQuery("")} aria-label="Очистить поиск"><X size={17} /></button>}</div>
@@ -804,33 +799,32 @@ function App() {
     </Dialog>
 
     <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-      <DialogContent className="lorym-dialog create-dialog">
+      <DialogContent className={`lorym-dialog create-dialog ${createMode === "document-upload" ? "document-upload-dialog" : ""}`}>
         <DialogHeader>
           <DialogTitle>{createMode === "note" ? "Новый документ" : createMode === "document-upload" ? "Загрузить файл" : "Добавить запись"}</DialogTitle>
-          <DialogDescription>{createMode === "note" ? "Документ будет сохранён в выбранном пространстве." : createMode === "document-upload" ? "Файлы появятся в выбранной папке пространства. Их можно будет открыть и найти по названию." : createMode === "link" ? "Ссылка создаст встречу в выбранном пространстве. В прототипе обработка не запускается." : "Аудио и презентацию одного созвона можно добавить вместе. В прототипе файлы доступны до перезагрузки, расшифровка не запускается."}</DialogDescription>
+          {createMode === "document-upload" ? <DialogDescription className="sr-only">Файлы будут добавлены в открытое пространство и папку.</DialogDescription> : <DialogDescription>{createMode === "note" ? "Документ будет сохранён в выбранном пространстве." : createMode === "link" ? "Ссылка создаст встречу в выбранном пространстве. В прототипе обработка не запускается." : "Аудио и презентацию одного созвона можно добавить вместе. В прототипе файлы доступны до перезагрузки, расшифровка не запускается."}</DialogDescription>}
         </DialogHeader>
-        {createMode !== "link" && <label className="create-space">Пространство
+        {createMode === "note" && <label className="create-space">Пространство
           <select value={targetSpace} onChange={(event) => { setTargetSpace(event.target.value); setTargetFolderId(""); }}>
             {spaces.filter((item) => item.access === "edit").map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
           </select>
         </label>}
-        {createMode === "document-upload" && <label className="create-space create-folder">Папка
-          <select value={targetFolderId} onChange={(event) => setTargetFolderId(event.target.value)}>
-            <option value="">Без папки</option>
-            {folders.filter((item) => item.space === targetSpace).map((item) => <option key={item.id} value={item.id}>{folderPath(folders, item.id)}</option>)}
-          </select>
-        </label>}
         {createMode === "file" || createMode === "document-upload" ? <>
-          <input ref={fileRef} type="file" multiple className="sr-only" accept={createMode === "file" ? "audio/*,video/*,.pdf,.ppt,.pptx" : ".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,image/*"} onChange={(event) => { setSelectedFiles(Array.from(event.target.files ?? [])); setCreateError(""); event.target.value = ""; }} />
-          <button className={`upload-area ${draggingFile ? "dragging" : ""}`} onClick={() => fileRef.current?.click()} onDragOver={(event) => { event.preventDefault(); setDraggingFile(true); }} onDragLeave={() => setDraggingFile(false)} onDrop={(event) => { event.preventDefault(); setDraggingFile(false); setSelectedFiles(Array.from(event.dataTransfer.files)); setCreateError(""); }}>
+          <input ref={fileRef} type="file" multiple className="sr-only" tabIndex={-1} aria-hidden="true" accept={createMode === "file" ? "audio/*,video/*,.pdf,.ppt,.pptx" : ".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,image/*"} onChange={(event) => { setSelectedFiles(Array.from(event.target.files ?? [])); setCreateError(""); event.target.value = ""; }} />
+          {createMode === "document-upload" ? <div className={`upload-area ${draggingFile ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDraggingFile(true); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDraggingFile(false); }} onDrop={(event) => { event.preventDefault(); setDraggingFile(false); setSelectedFiles(Array.from(event.dataTransfer.files)); setCreateError(""); }}>
+            <Upload size={30} strokeWidth={1.6} aria-hidden="true" />
+            <strong>Перетащите файлы сюда</strong>
+            <span>PDF, Word, презентации, таблицы и изображения</span>
+            <Button type="button" onClick={() => fileRef.current?.click()}>Выбрать файлы</Button>
+          </div> : <button className={`upload-area ${draggingFile ? "dragging" : ""}`} onClick={() => fileRef.current?.click()} onDragOver={(event) => { event.preventDefault(); setDraggingFile(true); }} onDragLeave={() => setDraggingFile(false)} onDrop={(event) => { event.preventDefault(); setDraggingFile(false); setSelectedFiles(Array.from(event.dataTransfer.files)); setCreateError(""); }}>
             <Upload size={22} strokeWidth={1.7} />
             <strong>Выбрать файлы</strong>
-            <span>{createMode === "document-upload" ? "или перетащить сюда PDF, Word, презентации, таблицы и изображения" : "или перетащить сюда аудио, видео, презентацию"}</span>
-          </button>
+            <span>или перетащить сюда аудио, видео, презентацию</span>
+          </button>}
           {selectedFiles.length > 0 && <div className="create-file-list" aria-label="Выбранные файлы">{selectedFiles.map((file, index) => <div key={`${file.name}-${index}`}><span>{file.name}</span><button aria-label={`Убрать ${file.name}`} onClick={() => setSelectedFiles((previous) => previous.filter((_, fileIndex) => fileIndex !== index))}><X size={16} /></button></div>)}</div>}
         </> : <label className="create-field">{createMode === "link" ? "Ссылка на запись" : "Название документа"}<Input value={newTitle} onChange={(event) => { setNewTitle(event.target.value); setCreateError(""); }} placeholder={createMode === "link" ? "https://…" : "Например, решения по запуску"} /></label>}
         {createError && <p className="create-error" role="alert">{createError}</p>}
-        <div className="dialog-actions"><Button variant="ghost" onClick={() => setCreateOpen(false)}>Отмена</Button><Button onClick={() => void addMaterial()}>{createMode === "note" ? "Создать документ" : createMode === "document-upload" ? "Загрузить файлы" : "Добавить запись"}</Button></div>
+        {(createMode !== "document-upload" || selectedFiles.length > 0) && <div className="dialog-actions"><Button variant="ghost" onClick={() => setCreateOpen(false)}>Отмена</Button><Button onClick={() => void addMaterial()}>{createMode === "note" ? "Создать документ" : createMode === "document-upload" ? "Загрузить файлы" : "Добавить запись"}</Button></div>}
       </DialogContent>
     </Dialog>
 

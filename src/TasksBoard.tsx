@@ -3,6 +3,7 @@ import { Pencil, Plus, X } from "lucide-react";
 import type { SpaceInfo } from "@/SpacesPage";
 import { SpaceDot } from "@/SpaceDot";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 type Task = { id: number; title: string; space: string; status: string };
 type Column = { id: string; label: string };
@@ -43,6 +44,7 @@ export function TasksBoard({ spaces, spaceFilter }: Props) {
   const [deletingColumn, setDeletingColumn] = useState<Column | null>(null);
 
   const writable = spaces.filter((item) => item.access === "edit");
+  const selectedSpace = writable.find((item) => item.name === destination);
   const filtered = tasks.filter((task) => spaces.some((space) => space.name === task.space) && (spaceFilter === "all" || task.space === spaceFilter));
   const canCreate = writable.length > 0 && (spaceFilter === "all" || writable.some((item) => item.name === spaceFilter));
 
@@ -105,8 +107,13 @@ export function TasksBoard({ spaces, spaceFilter }: Props) {
         </div>
         {canCreate && <button className="task-add-in-column" onClick={() => beginTask(column.id)}><Plus size={15} strokeWidth={1.8} /> Добавить задачу</button>}
         {creatingIn === column.id && <div className="task-create">
-          <input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") createTask(); if (event.key === "Escape") setCreatingIn(null); }} placeholder="Название задачи" aria-label="Название задачи" />
-          {spaceFilter === "all" && <select value={destination} onChange={(event) => setDestination(event.target.value)} aria-label="Пространство задачи">{writable.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select>}
+          <div className="task-title-field">
+            {selectedSpace && (spaceFilter === "all" && writable.length > 1 ? <DropdownMenu>
+              <DropdownMenuTrigger asChild><button type="button" className="task-space-picker" aria-label={`Пространство «${selectedSpace.name}». Выбрать другое`} title={`Пространство: ${selectedSpace.name}. Нажмите, чтобы изменить`}><SpaceDot name={selectedSpace.name} color={selectedSpace.color} decorative /></button></DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="task-space-menu" aria-label="Пространство задачи">{writable.map((item) => <DropdownMenuItem key={item.name} onSelect={() => setDestination(item.name)} className={item.name === destination ? "selected" : ""}><SpaceDot name={item.name} color={item.color} decorative />{item.name}</DropdownMenuItem>)}</DropdownMenuContent>
+            </DropdownMenu> : <SpaceDot name={selectedSpace.name} color={selectedSpace.color} />)}
+            <input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") createTask(); if (event.key === "Escape") setCreatingIn(null); }} placeholder="Название задачи" aria-label="Название задачи" />
+          </div>
           <div className="task-form-actions"><button onClick={createTask} disabled={!title.trim()}>Добавить</button><button className="task-cancel" onClick={() => setCreatingIn(null)}>Отмена</button></div>
         </div>}
         <div className="task-column-items">{items.map((task) => {

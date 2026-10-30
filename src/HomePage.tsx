@@ -9,14 +9,13 @@ type Props = {
   onChooseSpace: () => void;
   onOpenSpaces: () => void;
   onOpenMeetings: () => void;
-  onOpenNotes: () => void;
   onOpenTemplates: () => void;
   onOpenTasks: () => void;
   onOpenExampleMeeting: () => void;
   onOpenExampleNote: () => void;
 };
 
-export function HomePage({ canEdit, onUploadFiles, onAddLink, onCreateNote, onChooseSpace, onOpenSpaces, onOpenMeetings, onOpenNotes, onOpenTemplates, onOpenTasks }: Props) {
+export function HomePage({ canEdit, onUploadFiles, onAddLink, onCreateNote, onChooseSpace, onOpenSpaces, onOpenMeetings, onOpenTemplates, onOpenTasks }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -83,7 +82,7 @@ export function HomePage({ canEdit, onUploadFiles, onAddLink, onCreateNote, onCh
       <div className="home-start-main">
         <div className="home-intro">
           <h1 id="home-title">Соберите материалы в&nbsp;базу знаний</h1>
-          <p>Запись превращается в транскрипт и резюме встречи. В базе знаний можно собрать конспект из нескольких встреч и найти нужный вывод.</p>
+          <p>Запись превращается в транскрипт и резюме встречи. В пространстве можно собрать конспект из нескольких встреч и найти нужный вывод.</p>
         </div>
         <div className="home-actions" aria-label="Добавить материал">
           <input ref={fileRef} className="sr-only" type="file" accept="audio/*,video/*,.pdf,.ppt,.pptx" multiple onChange={(event) => { const files = Array.from(event.target.files ?? []); if (files.length) onUploadFiles(files); event.target.value = ""; }} />
@@ -101,9 +100,8 @@ export function HomePage({ canEdit, onUploadFiles, onAddLink, onCreateNote, onCh
     </section>
     <nav className="home-navigation" aria-label="Переход к разделам">
       {[
-        { label: "Все пространства", onClick: onOpenSpaces },
+        { label: "Мои пространства", onClick: onOpenSpaces },
         { label: "Записи", onClick: onOpenMeetings },
-        { label: "База знаний", onClick: onOpenNotes },
         { label: "Шаблоны", onClick: onOpenTemplates },
         { label: "Задачи", onClick: onOpenTasks },
       ].map(({ label, onClick }) => <button key={label} onClick={onClick}>{label}<ArrowUpRight size={15} strokeWidth={1.7} /></button>)}

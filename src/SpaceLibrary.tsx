@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import { ArrowRight, AudioLines, Check, FileText, Folder, Grid2X2, ImagePlus, List, MessageCircle, MoreHorizontal, Plus, Search, Upload, X } from "lucide-react";
+import { ArrowRight, AudioLines, Check, ChevronDown, ChevronRight, File, FileText, Folder, Grid2X2, ImagePlus, List, MessageCircle, MoreHorizontal, Plus, Search, Upload, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { folderPath, type Material, type FolderInfo } from "@/model";
@@ -26,17 +26,17 @@ type Props = {
   onMoveToFolder: (id: number, folderId: string | null) => void;
   onChangeCover: (image: string | undefined) => void;
   onChangeColor: (color: SpaceColor) => void;
-  onOpenKnowledge: () => void;
   onOpenTemplates: () => void;
 };
 
 type SortOrder = "recent" | "name" | "type";
 type AssistantMessage = { role: "user" | "assistant"; text: string; sourceId?: number };
 
-export function SpaceLibrary({ space, folderId, onFolderChange, spaceInfo, materials, folders, onOpenMaterial, onUploadFile, onAddRecording, onNewNote, onAddFolder, onRenameFolder, onDeleteFolder, onMoveToFolder, onChangeCover, onChangeColor, onOpenKnowledge, onOpenTemplates }: Props) {
+export function SpaceLibrary({ space, folderId, onFolderChange, spaceInfo, materials, folders, onOpenMaterial, onUploadFile, onAddRecording, onNewNote, onAddFolder, onRenameFolder, onDeleteFolder, onMoveToFolder, onChangeCover, onChangeColor, onOpenTemplates }: Props) {
   const [layout, setLayout] = useState<"grid" | "list">("list");
   const [sort, setSort] = useState<SortOrder>("recent");
   const [query, setQuery] = useState("");
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
   const [folderDialog, setFolderDialog] = useState<"create" | "rename" | null>(null);
   const [editingFolder, setEditingFolder] = useState<FolderInfo | null>(null);
   const [folderName, setFolderName] = useState("");
@@ -54,11 +54,20 @@ export function SpaceLibrary({ space, folderId, onFolderChange, spaceInfo, mater
   const editable = spaceInfo?.access === "edit";
   const activeFolder = folders.find((item) => item.id === folderId);
   const term = query.trim().toLocaleLowerCase("ru");
-  const shownFolders = folders.filter((item) => term ? item.name.toLocaleLowerCase("ru").includes(term) : item.parentId === folderId).sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  const folderRows: { folder: FolderInfo; depth: number; hasChildren: boolean }[] = [];
+  const walkFolders = (parentId: string | null, depth: number, visited: Set<string>) => {
+    folders.filter((item) => item.parentId === parentId && !visited.has(item.id)).sort((a, b) => a.name.localeCompare(b.name, "ru")).forEach((folder) => {
+      const hasChildren = folders.some((item) => item.parentId === folder.id);
+      folderRows.push({ folder, depth, hasChildren });
+      visited.add(folder.id);
+      if (!collapsedFolders.has(folder.id)) walkFolders(folder.id, depth + 1, visited);
+    });
+  };
+  walkFolders(null, 0, new Set());
   const shownMaterials = materials.filter((item) => {
     if (item.summaryFor && materials.some((meeting) => meeting.kind === "meeting" && meeting.id === item.summaryFor)) return false;
     if (term) return searchableMaterialText(item).includes(term) || (item.kind === "meeting" && materials.some((note) => note.summaryFor === item.id && searchableMaterialText(note).includes(term)));
-    return (item.folderId ?? null) === folderId;
+    return folderId === null || (item.folderId ?? null) === folderId;
   }).sort((a, b) => sort === "name" ? a.title.localeCompare(b.title, "ru") : sort === "type" ? a.kind.localeCompare(b.kind) || a.title.localeCompare(b.title, "ru") : 0);
   function materialPreview(item: Material) {
     const bodies = item.kind === "meeting" ? materials.filter((related) => related.summaryFor === item.id).map((related) => related.body) : [item.body];
@@ -96,7 +105,7 @@ export function SpaceLibrary({ space, folderId, onFolderChange, spaceInfo, mater
     setAssistantThreads((current) => ({ ...current, [space]: [...(current[space] ?? []), { role: "user", text: question }, { role: "assistant", text: answer, sourceId: firstMeeting?.id }] }));
     setAssistantDrafts((current) => ({ ...current, [space]: "" }));
   }
-  function openFolder(id: string) { onFolderChange(id); setQuery(""); }
+  function openFolder(id: string | null) { onFolderChange(id); setQuery(""); }
   function openAddMenu(left: number, top: number) {
     setAddMenu({ left: Math.max(12, Math.min(left, window.innerWidth - 220)), top: Math.max(12, Math.min(top, window.innerHeight - 190)) });
   }
@@ -159,7 +168,6 @@ export function SpaceLibrary({ space, folderId, onFolderChange, spaceInfo, mater
     </header>
 
     <div className="space-library-toolbar">
-      <button className="space-knowledge-link" onClick={onOpenKnowledge}>База знаний <ArrowRight size={15} /></button>
       <div className="library-tools">
         <label className="library-sort">Сортировка<select value={sort} onChange={(event) => setSort(event.target.value as SortOrder)}><option value="recent">Недавние</option><option value="name">По названию</option><option value="type">По типу</option></select></label>
         <div className="library-layout" aria-label="Вид материалов"><button className={layout === "grid" ? "active" : ""} aria-label="Плитка" aria-pressed={layout === "grid"} onClick={() => setLayout("grid")}><Grid2X2 size={17} /></button><button className={layout === "list" ? "active" : ""} aria-label="Список" aria-pressed={layout === "list"} onClick={() => setLayout("list")}><List size={18} /></button></div>
@@ -167,16 +175,20 @@ export function SpaceLibrary({ space, folderId, onFolderChange, spaceInfo, mater
     </div>
     <div className="library-search"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск в пространстве" aria-label="Поиск в пространстве" />{query && <button aria-label="Очистить поиск" onClick={() => setQuery("")}><X size={16} /></button>}</div>
 
-    <div className={`library-sections ${shownFolders.length > 0 ? "has-folders" : ""}`} onClick={openAddMenuFromArea}>
-    {shownFolders.length > 0 && <nav className="library-group library-folder-rail" aria-label="Папки пространства"><div className="library-group-heading"><h2>Папки</h2></div><div className="library-folders">{shownFolders.map((item) => <div className="library-folder" key={item.id}>
-      <button className="library-folder-open" onClick={() => openFolder(item.id)}><Folder size={23} strokeWidth={1.55} /><strong>{item.name}</strong></button>
-      {editable && <DropdownMenu><DropdownMenuTrigger asChild><button className="library-item-more" aria-label={`Действия с папкой «${item.name}»`}><MoreHorizontal size={18} /></button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onSelect={() => startFolderDialog("rename", item)}>Переименовать</DropdownMenuItem><DropdownMenuItem onSelect={() => setDeleteTarget(item)}>Удалить папку</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
-    </div>)}</div></nav>}
+    <div className={`library-sections ${folders.length > 0 ? "has-folders" : ""}`} onClick={openAddMenuFromArea}>
+    {folders.length > 0 && <nav className="library-group library-folder-rail" aria-label="Папки пространства"><div className="library-group-heading"><h2>Папки</h2></div><div className="library-folders">
+      <button className={`library-folder-all ${folderId === null ? "active" : ""}`} aria-current={folderId === null ? "page" : undefined} onClick={() => openFolder(null)}><FileText size={17} strokeWidth={1.6} />Все материалы</button>
+      {folderRows.map(({ folder: item, depth, hasChildren }) => <div className={`library-folder ${folderId === item.id ? "active" : ""}`} key={item.id} style={{ paddingLeft: `${depth * 16}px` }}>
+        {hasChildren ? <button className="library-folder-toggle" aria-label={`${collapsedFolders.has(item.id) ? "Развернуть" : "Свернуть"} папку «${item.name}»`} aria-expanded={!collapsedFolders.has(item.id)} onClick={() => setCollapsedFolders((previous) => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })}>{collapsedFolders.has(item.id) ? <ChevronRight size={15} /> : <ChevronDown size={15} />}</button> : <span className="library-folder-toggle-placeholder" />}
+        <button className="library-folder-open" aria-current={folderId === item.id ? "page" : undefined} onClick={() => openFolder(item.id)}><Folder size={18} strokeWidth={1.55} /><strong>{item.name}</strong></button>
+        {editable && <DropdownMenu><DropdownMenuTrigger asChild><button className="library-item-more" aria-label={`Действия с папкой «${item.name}»`}><MoreHorizontal size={18} /></button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onSelect={() => startFolderDialog("rename", item)}>Переименовать</DropdownMenuItem><DropdownMenuItem onSelect={() => setDeleteTarget(item)}>Удалить папку</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
+      </div>)}
+    </div></nav>}
 
-    <div className="library-group library-material-group"><div className="library-group-heading"><h2>{term ? "Результаты поиска" : activeFolder ? "Содержимое папки" : shownFolders.length ? "Материалы без папки" : "Материалы"}</h2></div>
+    <div className="library-group library-material-group"><div className="library-group-heading"><h2>{term ? "Результаты поиска" : activeFolder ? activeFolder.name : "Материалы"}</h2></div>
       {shownMaterials.length > 0 ? <div className={`library-materials ${layout}`}>{shownMaterials.map((item) => <div className={`library-material ${item.kind}`} key={item.id}>
         <button className="library-material-open" onClick={() => onOpenMaterial(item)} draggable={editable && !item.summaryFor} onDragStart={(event) => { if (!editable || item.summaryFor) return; event.dataTransfer.setData(MATERIAL_DRAG_TYPE, String(item.id)); event.dataTransfer.effectAllowed = "move"; }}>
-          <span className="library-material-type">{item.kind === "meeting" ? <AudioLines size={21} strokeWidth={1.6} /> : <FileText size={21} strokeWidth={1.6} />}{item.kind === "meeting" ? "Встреча" : item.kind === "file" ? "Файл" : item.summaryFor ? "Резюме встречи" : "Документ"}</span>
+          <span className="library-material-type">{item.kind === "meeting" ? <AudioLines size={21} strokeWidth={1.6} /> : item.kind === "file" ? <File size={21} strokeWidth={1.6} /> : <FileText size={21} strokeWidth={1.6} />}{item.kind === "meeting" ? "Встреча" : item.kind === "file" ? "Файл" : item.summaryFor ? "Резюме встречи" : "Документ"}{!term && folderId === null && item.folderId && <span className="library-material-folder">/ {folderPath(folders, item.folderId)}</span>}</span>
           <span className="library-material-heading"><strong>{item.title}</strong><small>{item.date}</small></span>{materialPreview(item) && <span className="library-material-preview">{materialPreview(item)}</span>}<span className="library-material-bottom"><ArrowRight size={16} /></span>
         </button>
         {editable && <DropdownMenu><DropdownMenuTrigger asChild><button className="library-item-more" aria-label={`Переместить «${item.title}»`}><MoreHorizontal size={18} /></button></DropdownMenuTrigger><DropdownMenuContent align="end" className="library-move-menu"><div className="material-move-label">Переместить в папку</div><DropdownMenuItem onSelect={() => onMoveToFolder(item.id, null)}>Без папки</DropdownMenuItem>{folders.map((folder) => <DropdownMenuItem key={folder.id} onSelect={() => onMoveToFolder(item.id, folder.id)}>{folderPath(folders, folder.id)}{item.folderId === folder.id && <Check size={14} />}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>}

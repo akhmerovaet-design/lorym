@@ -27,7 +27,7 @@ export function SpaceTree({ spaces, currentSpace, isSpaceView, isCatalogView, on
 
   return <div className="space-tree-section">
     <div className={`space-tree-parent ${isCatalogView ? "active" : ""}`}>
-      <button className="space-tree-parent-label" aria-current={isCatalogView ? "page" : undefined} onClick={onOpenCatalog}>Все пространства</button>
+      <button className="space-tree-parent-label" aria-current={isCatalogView ? "page" : undefined} onClick={onOpenCatalog}>Мои пространства</button>
       <button className="space-tree-toggle" aria-label={expanded ? "Свернуть пространства" : "Развернуть пространства"} aria-expanded={expanded} aria-controls="sidebar-spaces" onClick={() => setExpanded((value) => !value)}><ChevronDown size={16} /></button>
     </div>
     {expanded && <div className="space-tree" id="sidebar-spaces" aria-label="Список пространств">

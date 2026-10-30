@@ -7,6 +7,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SpaceDot } from "@/SpaceDot";
 import { SPACE_COLORS, defaultSpaceColor, type SpaceColor } from "@/spaceColors";
+import { searchableMaterialText } from "@/materialSearch";
+import type { Material } from "@/model";
 
 export type SpaceInfo = {
   name: string;
@@ -24,7 +26,7 @@ export type SpaceInfo = {
 type Props = {
   spaces: SpaceInfo[];
   trashedSpaces: SpaceInfo[];
-  materials: SearchMaterial[];
+  materials: Material[];
   onOpen: (name: string) => void;
   onOpenMaterial: (id: number) => void;
   onCreate: (space: SpaceInfo) => void;
@@ -37,17 +39,6 @@ type Props = {
   onDownload: (name: string) => void;
   createFromSidebar: boolean;
   onCreateHandled: () => void;
-};
-
-type SearchMaterial = {
-  id: number;
-  kind: "meeting" | "note" | "file";
-  title: string;
-  detail: string;
-  date: string;
-  topic: string;
-  space: string;
-  searchText?: string;
 };
 
 type SpaceFilter = "all" | "personal" | "organization" | "trash";
@@ -78,7 +69,7 @@ export function SpacesPage({ spaces, trashedSpaces, materials, onOpen, onOpenMat
   const shown = spaces.filter((item) => filter === "all" || item.kind === filter);
   const searchTerm = search.trim().toLocaleLowerCase("ru");
   const foundSpaces = searchTerm ? spaces.filter((item) => `${item.name} ${item.organization ?? ""}`.toLocaleLowerCase("ru").includes(searchTerm)) : [];
-  const foundMaterials = searchTerm ? materials.filter((item) => spaces.some((space) => space.name === item.space) && `${item.title} ${item.detail} ${item.topic} ${item.space} ${item.searchText ?? ""}`.toLocaleLowerCase("ru").includes(searchTerm)) : [];
+  const foundMaterials = searchTerm ? materials.filter((item) => spaces.some((space) => space.name === item.space) && `${item.space} ${searchableMaterialText(item)}`.includes(searchTerm)) : [];
   const shareUrl = shareTarget ? `${window.location.origin}${window.location.pathname}?space=${encodeURIComponent(shareTarget)}` : "";
   const sharedSpace = spaces.find((item) => item.name === shareTarget);
   const knownOrganizations = Array.from(new Set(spaces.map((item) => item.organization).filter((value): value is string => !!value)));
@@ -178,9 +169,9 @@ export function SpacesPage({ spaces, trashedSpaces, materials, onOpen, onOpenMat
 
   return <div className="spaces-page">
     <div className="spaces-heading">
-      <h1>Пространства</h1>
+      <h1>Мои пространства</h1>
     </div>
-    <div className="global-search"><Search size={20} aria-hidden="true" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск по всем пространствам" aria-label="Поиск по всем пространствам" />{search && <button onClick={() => setSearch("")} aria-label="Очистить поиск"><X size={17} /></button>}</div>
+    <div className="global-search"><Search size={20} aria-hidden="true" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск по пространствам и материалам" aria-label="Поиск по всем пространствам и материалам" />{search && <button onClick={() => setSearch("")} aria-label="Очистить поиск"><X size={17} /></button>}</div>
     {searchTerm ? <section className="global-results" aria-live="polite">
       <div className="global-results-heading"><h2>Результаты поиска</h2></div>
       {foundSpaces.length + foundMaterials.length > 0 ? <div className="global-results-list">

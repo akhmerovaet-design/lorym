@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { ArrowRight, MoreHorizontal, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, Copy, Download, FileText, Link2, MoreHorizontal, Plus, Search, Share2, Trash2, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { SpaceFilter } from "@/SpaceFilter";
@@ -24,7 +24,7 @@ type Props = {
   onSpaceFilter: (value: string) => void;
   focusedMeetingId: number | null;
   onAddRecording: (space: string) => void;
-  onOpenNote: (note: Material, meetingId: number) => void;
+  onOpenKnowledgeNote: (note: Material) => void;
   onAddSummary: (meeting: Material, template: string, focus: string) => number;
   onRenameNote: (note: Material, title: string) => void;
   onRegenerateNote: (note: Material, template: string, focus: string) => void;
@@ -60,6 +60,42 @@ function plainText(html: string) {
   return (new DOMParser().parseFromString(withSpaces, "text/html").body.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
+function summaryText(note: Material) {
+  const body = new DOMParser().parseFromString(note.body ?? "", "text/html").body;
+  const first = body.firstElementChild;
+  if (first && /^H[1-6]$/.test(first.tagName) && first.textContent?.trim() === note.title.trim()) first.remove();
+  const lines: string[] = [];
+  function read(node: Node): string {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+    if (!(node instanceof Element)) return "";
+    if (node.tagName === "BR") return "\n";
+    const content = Array.from(node.childNodes).map(read).join("");
+    if (!content.trim()) return "";
+    if (node.tagName === "LI") return `• ${content.trim()}\n`;
+    if (/^(?:P|DIV|H[1-6]|UL|OL)$/.test(node.tagName)) return `${content.trim()}\n\n`;
+    return content;
+  }
+  for (const node of body.childNodes) lines.push(read(node));
+  const content = lines.join("").replace(/[\t ]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return content ? `${note.title}\n\n${content}` : note.title;
+}
+
+function transcriptText(part: Part) {
+  return part.lines.map((line) => `${line.time} · ${line.speaker}\n${line.text}`).join("\n\n");
+}
+
+function downloadText(text: string, title: string) {
+  const filename = `${title.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim() || "Lorym"}.txt`;
+  const url = URL.createObjectURL(new Blob(["\uFEFF", text], { type: "text/plain;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 function matchAt(text: string, term: string): { index: number; length: number } | null {
   const lower = text.toLocaleLowerCase("ru");
   const exact = lower.indexOf(term);
@@ -78,10 +114,20 @@ function Highlight({ text, query }: { text: string; query: string }) {
   return <>{text.slice(0, match.index)}<mark>{text.slice(match.index, match.index + match.length)}</mark>{text.slice(match.index + match.length)}</>;
 }
 
-export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter, onSpaceFilter, focusedMeetingId, onAddRecording, onOpenNote, onAddSummary, onRenameNote, onRegenerateNote, onDeleteNote, onDeleteRecording, onCreateTemplate, searchRef }: Props) {
+function linkedRecording() {
+  const params = new URLSearchParams(window.location.search);
+  const id = Number(params.get("recording"));
+  const part = Number(params.get("part") ?? "0");
+  if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(part) || part < 0) return null;
+  return { id, part, tab: params.get("tab") === "summary" ? "summary" as const : "transcript" as const };
+}
+
+export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter, onSpaceFilter, focusedMeetingId, onAddRecording, onOpenKnowledgeNote, onAddSummary, onRenameNote, onRegenerateNote, onDeleteNote, onDeleteRecording, onCreateTemplate, searchRef }: Props) {
   const [query, setQuery] = useState("");
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [tab, setTab] = useState<"transcript" | "summary">("transcript");
+  const [selectedKey, setSelectedKey] = useState<string | null>(() => { const link = linkedRecording(); return link ? `${link.id}:${link.part}` : null; });
+  const [tab, setTab] = useState<"transcript" | "summary">(() => linkedRecording()?.tab ?? "transcript");
+  const [shareDialog, setShareDialog] = useState(false);
+  const [copyState, setCopyState] = useState<"transcript" | "summary" | "transcript-link" | "summary-link" | "error" | null>(null);
   const [summaryDialog, setSummaryDialog] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Recording | null>(null);
   const [template, setTemplate] = useState(templates[0]?.name ?? "");
@@ -109,6 +155,7 @@ export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter
     ?? results[0];
   const selectedHit = selected?.hit;
   const selectedSummary = notes.find((note) => note.summaryFor === selected?.meeting.id && note.space === selected?.meeting.space);
+  const relatedNotes = notes.filter((note) => selected && note.space === selected.meeting.space && note.summaryFor !== selected.meeting.id && note.sourceIds?.includes(selected.meeting.id));
   const canEditSummary = spaces.some((item) => item.name === selected?.meeting.space && item.access === "edit");
   const playable = selected?.file;
   const demoDuration = selected?.meeting.id === 1 ? (selected.index === 0 ? 1722 : 1560) : (Number(selected?.part?.duration.match(/\d+/)?.[0] ?? 30) * 60);
@@ -116,7 +163,8 @@ export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter
 
   const hitTime = selectedHit?.time;
   useEffect(() => {
-    setSelectedKey(focusedMeetingId === null ? null : `${focusedMeetingId}:0`);
+    const link = linkedRecording();
+    setSelectedKey(focusedMeetingId === null ? null : `${focusedMeetingId}:${link?.id === focusedMeetingId ? link.part : 0}`);
   }, [focusedMeetingId]);
   useEffect(() => {
     if (hitTime && tab === "transcript") {
@@ -128,6 +176,7 @@ export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter
   function choose(result: Result) {
     setSelectedKey(result.key);
     setDemoSeek(null);
+    setCopyState(null);
     if (result.hit) setTab("transcript");
   }
 
@@ -137,6 +186,34 @@ export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter
     const element = audioRef.current ?? videoRef.current;
     if (element) element.currentTime = target;
     else setDemoSeek({ seconds: target, token: ++demoSeekToken.current });
+  }
+
+  function shareUrl(targetTab: "transcript" | "summary") {
+    if (!selected) return "";
+    const url = new URL(window.location.origin + window.location.pathname);
+    url.searchParams.set("recording", String(selected.meeting.id));
+    url.searchParams.set("part", String(selected.index));
+    url.searchParams.set("tab", targetTab);
+    return url.toString();
+  }
+
+  async function copy(value: string, kind: "transcript" | "summary" | "transcript-link" | "summary-link") {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyState(kind);
+    } catch {
+      setCopyState("error");
+    }
+  }
+
+  function copyTranscript() {
+    if (!selected?.part) return;
+    void copy(transcriptText(selected.part), "transcript");
+  }
+
+  function downloadCurrent() {
+    if (tab === "transcript" && selected?.part) downloadText(transcriptText(selected.part), `${selected.title} — транскрипт`);
+    if (tab === "summary" && selectedSummary) downloadText(summaryText(selectedSummary), `${selected.meeting.title} — резюме встречи`);
   }
 
   function createSummary() {
@@ -185,18 +262,28 @@ export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter
           <div className="recording-preview-head"><h2><SpaceDot name={selected.meeting.space} color={spaces.find((item) => item.name === selected.meeting.space)?.color} /><span>{selected.title}</span></h2></div>
           <div className="recording-preview-tabs">
             <div className="recording-tabs-scroll" role="tablist" aria-label="Содержимое записи">
-              <button role="tab" aria-selected={tab === "transcript"} className={`recording-transcript-tab ${tab === "transcript" ? "active" : ""}`} onClick={() => setTab("transcript")}>Транскрипт</button>
+              <button role="tab" aria-selected={tab === "transcript"} className={`recording-transcript-tab ${tab === "transcript" ? "active" : ""}`} onClick={() => { setTab("transcript"); setCopyState(null); }}>Транскрипт</button>
               <span className={`recording-summary-tab ${tab === "summary" ? "active" : ""}`} role="presentation">
                 {selectedSummary ? <NoteContextActions note={selectedSummary} templates={templates} canEdit={canEditSummary} onRename={onRenameNote} onRegenerate={onRegenerateNote} onDelete={onDeleteNote} onCreateTemplate={onCreateTemplate}>
-                  <button role="tab" aria-selected={tab === "summary"} title={canEditSummary ? "Резюме · правый клик для действий" : "Резюме"} onClick={() => setTab("summary")}>Резюме</button>
-                </NoteContextActions> : <button role="tab" aria-selected={tab === "summary"} onClick={() => setTab("summary")}>Резюме</button>}
+                  <button role="tab" aria-selected={tab === "summary"} title={canEditSummary ? "Резюме · правый клик для действий" : "Резюме"} onClick={() => { setTab("summary"); setCopyState(null); }}>Резюме</button>
+                </NoteContextActions> : <button role="tab" aria-selected={tab === "summary"} onClick={() => { setTab("summary"); setCopyState(null); }}>Резюме</button>}
               </span>
+            </div>
+            <div className="recording-tab-actions">
+              {((tab === "transcript" && selected.part) || (tab === "summary" && selectedSummary)) && <>
+                <button type="button" onClick={tab === "transcript" ? copyTranscript : () => { if (selectedSummary) void copy(summaryText(selectedSummary), "summary"); }} title={tab === "transcript" ? "Копировать текст транскрипта" : "Копировать текст резюме"} aria-label={tab === "transcript" ? "Копировать текст транскрипта" : "Копировать текст резюме"}>{copyState === tab ? <Check size={15} /> : <Copy size={15} />}<span>{copyState === tab ? "Скопировано" : "Копировать"}</span></button>
+                <button type="button" onClick={downloadCurrent} title={tab === "transcript" ? "Скачать транскрипт в формате TXT" : "Скачать резюме встречи в формате TXT"} aria-label={tab === "transcript" ? "Скачать транскрипт" : "Скачать резюме встречи"}><Download size={15} /><span>Скачать</span></button>
+              </>}
+              <button type="button" onClick={() => { setCopyState(null); setShareDialog(true); }} title="Поделиться записью" aria-label="Поделиться транскриптом или резюме"><Share2 size={15} /><span>Поделиться</span></button>
             </div>
           </div>
           <div className="recording-player"><div className="recording-player-source"><span>{playable?.name ?? selected.part?.name ?? "Запись встречи"}</span></div>{playable?.url ? playable.type.startsWith("video/") ? <video ref={videoRef} key={playable.url} src={playable.url} controls preload="metadata" /> : <audio ref={audioRef} key={playable.url} src={playable.url} controls preload="metadata" /> : selected.part ? <DemoAudioPlayer key={`${selected.key}:${demoSeek?.token ?? 0}`} durationSeconds={demoDuration} seekRequest={demoSeek} /> : <p className="recording-file-missing">Файл недоступен после перезагрузки.</p>}</div>
+          {relatedNotes.length > 0 && <div className="recording-knowledge-links">
+            <DropdownMenu><DropdownMenuTrigger asChild><button aria-label="Связанные документы пространства"><span>Связанные документы</span><ChevronDown size={13} strokeWidth={1.7} aria-hidden="true" /></button></DropdownMenuTrigger><DropdownMenuContent align="start" className="recording-related-documents">{relatedNotes.map((note) => <DropdownMenuItem key={note.id} onSelect={() => onOpenKnowledgeNote(note)}><FileText size={15} strokeWidth={1.6} />{note.title}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
+          </div>}
           {tab === "transcript" ? <div className="recording-transcript" ref={transcriptRef} role="tabpanel">
-            {selected.part ? selected.part.lines.map((line) => <button className={`recording-line ${selectedHit?.time === line.time ? "match" : ""}`} key={line.time} onClick={() => jump(line.time)}><time>{line.time}</time><span><Highlight text={line.text} query={query} /></span></button>) : <div className="recording-content-empty"><h3>Расшифровка пока недоступна</h3><p>В рабочем сервисе она создаётся автоматически. В прототипе обработка не запускается.</p></div>}
-          </div> : <div className="recording-summary" role="tabpanel">{selectedSummary ? <div className="recording-summary-body"><KnowledgeBody html={selectedSummary.body ?? ""} title={selectedSummary.title} /><button onClick={() => onOpenNote(selectedSummary, selected.meeting.id)}>Открыть в базе знаний <ArrowRight size={16} /></button></div> : <div className="recording-content-empty"><h3>Резюме пока нет</h3>{canEditSummary && <button onClick={() => setSummaryDialog(true)}>Создать по шаблону <ArrowRight size={16} /></button>}</div>}</div>}
+            {selected.part ? selected.part.lines.map((line) => <button className={`recording-line ${selectedHit?.time === line.time ? "match" : ""}`} key={line.time} onClick={() => jump(line.time)}><time>{line.time}</time><span className="recording-line-content"><span className="recording-line-speaker">{line.speaker}</span><span><Highlight text={line.text} query={query} /></span></span></button>) : <div className="recording-content-empty"><h3>Расшифровка пока недоступна</h3><p>В рабочем сервисе она создаётся автоматически. В прототипе обработка не запускается.</p></div>}
+          </div> : <div className="recording-summary" role="tabpanel">{selectedSummary ? <div className="recording-summary-body"><KnowledgeBody html={selectedSummary.body ?? ""} title={selectedSummary.title} /></div> : <div className="recording-content-empty"><h3>Резюме пока нет</h3>{canEditSummary && <button onClick={() => setSummaryDialog(true)}>Создать по шаблону <ArrowRight size={16} /></button>}</div>}</div>}
         </> : <div className="recordings-no-selection">Выберите запись слева.</div>}
       </article>
     </div>
@@ -216,6 +303,16 @@ export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter
         <label>Промпт для этого резюме <span>необязательно</span><textarea value={summaryPrompt} onChange={(event) => setSummaryPrompt(event.target.value)} placeholder="Например, выдели решения, риски и следующие шаги" /></label>
         {templateError && <p className="recording-template-error" role="alert">{templateError}</p>}
         <div className="dialog-actions"><button className="meeting-dialog-cancel" onClick={() => setSummaryDialog(false)}>Отмена</button><button className="add-button" onClick={createSummary} disabled={!template}>{template === "__new__" ? "Сохранить шаблон и создать резюме" : "Создать резюме"}</button></div>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={shareDialog} onOpenChange={setShareDialog}>
+      <DialogContent className="lorym-dialog recording-share-dialog">
+        <DialogHeader><DialogTitle>Поделиться записью</DialogTitle><DialogDescription>Скопируйте ссылку на нужную часть встречи.</DialogDescription></DialogHeader>
+        <div className="recording-share-options">
+          <div className="recording-share-option"><div><Link2 size={17} /><span>Транскрипт</span></div><button type="button" onClick={() => void copy(shareUrl("transcript"), "transcript-link")}><Copy size={16} />{copyState === "transcript-link" ? "Скопировано" : "Скопировать ссылку"}</button></div>
+          <div className="recording-share-option"><div><FileText size={17} /><span>Резюме встречи</span></div>{selectedSummary ? <button type="button" onClick={() => void copy(shareUrl("summary"), "summary-link")}><Copy size={16} />{copyState === "summary-link" ? "Скопировано" : "Скопировать ссылку"}</button> : <span className="recording-share-unavailable">Резюме пока нет</span>}</div>
+        </div>
+        {copyState === "error" && <p className="recording-share-error" role="alert">Не удалось скопировать. Разрешите доступ к буферу обмена.</p>}
       </DialogContent>
     </Dialog>
     <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>

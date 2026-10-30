@@ -1,6 +1,5 @@
 import { useMemo, useState, type ReactNode, type RefObject } from "react";
-import { ArrowRight, AudioLines, ChevronDown, ChevronRight, File, FileText, Folder, Plus, Search, X } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ArrowRight, AudioLines, ChevronDown, ChevronRight, File, FileAudio, FileText, Folder, Search, X } from "lucide-react";
 import { SpaceFilter } from "@/SpaceFilter";
 import { KnowledgeBody } from "@/KnowledgeBody";
 import { demoParts } from "@/meetingData";
@@ -19,8 +18,8 @@ type Props = {
   spaces: SpaceInfo[];
   templates: TemplateInfo[];
   spaceFilter: string;
+  focusedNoteId: number | null;
   onSpaceFilter: (value: string) => void;
-  onCreateDigest: (space: string, sourceIds: number[]) => void;
   onOpenNote: (note: Material) => void;
   onOpenMeeting: (meeting: Material) => void;
   onOpenFile: (file: Material) => void;
@@ -87,14 +86,10 @@ function firstItem(groups: KnowledgeGroup[]): TreeItem | undefined {
   }
 }
 
-export function NotesPage({ notes, meetings, files, folders, spaces, templates, spaceFilter, onSpaceFilter, onCreateDigest, onOpenNote, onOpenMeeting, onOpenFile, onRenameNote, onRegenerateNote, onDeleteNote, onCreateTemplate, searchRef }: Props) {
+export function NotesPage({ notes, meetings, files, folders, spaces, templates, spaceFilter, focusedNoteId, onSpaceFilter, onOpenNote, onOpenMeeting, onOpenFile, onRenameNote, onRegenerateNote, onDeleteNote, onCreateTemplate, searchRef }: Props) {
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-  const [createOpen, setCreateOpen] = useState(false);
-  const [draftSpace, setDraftSpace] = useState("");
-  const [sourceSelection, setSourceSelection] = useState<number[]>([]);
-  const writableSpaces = spaces.filter((item) => item.access === "edit");
 
   const term = query.toLocaleLowerCase("ru").trim();
   const items = useMemo(() => {
@@ -122,20 +117,8 @@ export function NotesPage({ notes, meetings, files, folders, spaces, templates, 
   }, [notes, meetings, files, spaceFilter, term]);
   const visibleSpaces = spaces.filter((item) => spaceFilter === "all" || item.name === spaceFilter);
   const tree = useMemo(() => makeKnowledgeTree(items, folders, visibleSpaces), [items, folders, visibleSpaces]);
-  const selected = items.flatMap((item) => [item, ...item.children]).find((item) => item.key === selectedKey) ?? firstItem(tree.roots);
+  const selected = items.flatMap((item) => [item, ...item.children]).find((item) => item.key === (selectedKey ?? (focusedNoteId === null ? null : `note:${focusedNoteId}`))) ?? firstItem(tree.roots);
   const selectedSources = meetings.filter((meeting) => selected?.kind === "note" && selected.material.sourceIds?.includes(meeting.id));
-  const candidateMeetings = meetings.filter((meeting) => meeting.space === draftSpace);
-
-  function startDigest() {
-    setDraftSpace(spaceFilter !== "all" && writableSpaces.some((item) => item.name === spaceFilter) ? spaceFilter : writableSpaces[0]?.name ?? "");
-    setSourceSelection([]);
-    setCreateOpen(true);
-  }
-  function createDigest() {
-    if (!draftSpace || !sourceSelection.length) return;
-    onCreateDigest(draftSpace, sourceSelection);
-    setCreateOpen(false);
-  }
   function toggleGroup(key: string) {
     setCollapsed((previous) => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   }
@@ -184,7 +167,7 @@ export function NotesPage({ notes, meetings, files, folders, spaces, templates, 
   const transcriptParts = selected?.kind === "transcript" ? demoParts(selected.material.id) : [];
 
   return <section className="notes-page knowledge-page" aria-label="База знаний">
-    <div className="recordings-heading"><h1>База знаний</h1><button className="add-button" disabled={!writableSpaces.length} onClick={startDigest}><Plus size={18} /> Новый конспект</button></div>
+    <div className="recordings-heading"><h1>База знаний</h1></div>
     <div className="recordings-controls"><SpaceFilter spaces={spaces} value={spaceFilter} onChange={(value) => { onSpaceFilter(value); setSelectedKey(null); }} /></div>
     <div className="recordings-layout knowledge-layout">
       <aside className="recordings-list-pane" aria-label="Дерево базы знаний">
@@ -200,7 +183,7 @@ export function NotesPage({ notes, meetings, files, folders, spaces, templates, 
             </> : selected.kind === "transcript" ? transcriptParts.length ? <div className="knowledge-transcript">{transcriptParts.map((part) => <section key={part.name}>{transcriptParts.length > 1 && <h3>{part.name}</h3>}{part.lines.map((line, index) => <div key={`${part.name}:${index}`}><time>{line.time}</time><p>{line.text}</p></div>)}</section>)}</div> : <p className="knowledge-body-empty">Транскрипт появится после обработки записи.</p>
               : selected.kind === "file" ? <div className="knowledge-file-preview"><File size={24} strokeWidth={1.5} /><p>{selectedMaterial.fileName ?? selectedMaterial.title}</p><span>Файл хранится в пространстве «{selectedMaterial.space}».</span></div>
               : <>
-                {selectedSources.length > 0 && <div className="knowledge-preview-sources">{selectedSources.map((meeting) => <button key={meeting.id} onClick={() => onOpenMeeting(meeting)} aria-label={`Посмотреть источник: ${meeting.title}`}><AudioLines size={15} strokeWidth={1.7} aria-hidden="true" /><span>Посмотреть источник:</span><strong>{meeting.title}</strong></button>)}</div>}
+                {selectedSources.length > 0 && <div className="knowledge-preview-sources">{selectedSources.map((meeting) => <button key={meeting.id} onClick={() => onOpenMeeting(meeting)} aria-label={`Посмотреть источник: ${meeting.title}`}><FileAudio size={16} strokeWidth={1.7} aria-hidden="true" /><span>Посмотреть источник:</span><span className="knowledge-source-title">{meeting.title}</span></button>)}</div>}
                 <KnowledgeBody html={selectedMaterial.body ?? ""} title={selectedMaterial.title} emptyText="Документ пока пустой. Откройте редактор, чтобы добавить содержание." />
               </>}
           </div>
@@ -208,11 +191,5 @@ export function NotesPage({ notes, meetings, files, folders, spaces, templates, 
       </article>
     </div>
 
-    <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent className="lorym-dialog knowledge-create-dialog"><DialogHeader><DialogTitle>Новый конспект</DialogTitle><DialogDescription>Выберите встречи одного пространства. Откроется черновик, который можно дополнить вручную.</DialogDescription></DialogHeader>
-      <label className="knowledge-create-space">Пространство<select value={draftSpace} onChange={(event) => { setDraftSpace(event.target.value); setSourceSelection([]); }}>{writableSpaces.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label>
-      <div className="knowledge-create-source-label">Встречи</div>
-      <div className="knowledge-create-sources">{candidateMeetings.length ? candidateMeetings.map((meeting) => <label key={meeting.id}><input type="checkbox" checked={sourceSelection.includes(meeting.id)} onChange={(event) => setSourceSelection((previous) => event.target.checked ? [...previous, meeting.id] : previous.filter((id) => id !== meeting.id))} /><span>{meeting.title}</span></label>) : <p>В этом пространстве пока нет встреч.</p>}</div>
-      <div className="dialog-actions"><button className="meeting-dialog-cancel" onClick={() => setCreateOpen(false)}>Отмена</button><button className="add-button" disabled={!sourceSelection.length} onClick={createDigest}>Создать черновик</button></div>
-    </DialogContent></Dialog>
   </section>;
 }
