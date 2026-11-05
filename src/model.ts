@@ -12,6 +12,7 @@ export type Material = {
   title: string;
   detail: string;
   date: string;
+  createdAt?: number;
   topic: string;
   space: string;
   folderId?: string | null;

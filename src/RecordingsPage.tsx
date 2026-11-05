@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { ArrowRight, Check, ChevronDown, Copy, Download, FileText, Link2, MoreHorizontal, Plus, Search, Share2, Trash2, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, Copy, Download, FileText, Link2, MoreHorizontal, Plus, Search, Share2, Trash2, UsersRound, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { SpaceFilter } from "@/SpaceFilter";
@@ -11,10 +11,27 @@ import { DemoAudioPlayer } from "@/DemoAudioPlayer";
 import { KnowledgeBody } from "@/KnowledgeBody";
 import { SpaceDot } from "@/SpaceDot";
 import { NoteContextActions } from "@/NoteContextActions";
+import { Popover } from "radix-ui";
 
 type Hit = { time: string; text: string };
 type Recording = { key: string; meeting: Material; index: number; title: string; detail: string; part?: Part; file?: SourceFile };
 type Result = Recording & { hit?: Hit };
+type TranscriptEdits = {
+  speakers: Record<string, Record<string, string>>;
+  lines: Record<string, Record<string, string>>;
+  addedSpeakers: Record<string, string[]>;
+  lineSpeakers: Record<string, Record<string, string>>;
+};
+const transcriptEditsKey = "lorym-prototype-transcript-edits";
+
+function savedTranscriptEdits(): TranscriptEdits {
+  try {
+    const saved = JSON.parse(localStorage.getItem(transcriptEditsKey) ?? "null") as Partial<TranscriptEdits> | null;
+    return { speakers: saved?.speakers ?? {}, lines: saved?.lines ?? {}, addedSpeakers: saved?.addedSpeakers ?? {}, lineSpeakers: saved?.lineSpeakers ?? {} };
+  } catch {
+    return { speakers: {}, lines: {}, addedSpeakers: {}, lineSpeakers: {} };
+  }
+}
 type Props = {
   meetings: Material[];
   notes: Material[];
@@ -41,13 +58,18 @@ function hitFor(part: Part | undefined, query: string): Hit | undefined {
   return line ? { time: line.time, text: line.text } : undefined;
 }
 
-function recordingsFor(meeting: Material): Recording[] {
+function recordingsFor(meeting: Material, edits?: TranscriptEdits): Recording[] {
   const files = meeting.sourceFiles?.filter((file) => file.type.startsWith("audio/") || file.type.startsWith("video/")) ?? [];
   const parts = demoParts(meeting.id);
   const count = Math.max(files.length, parts.length, 1);
   return Array.from({ length: count }, (_, index) => {
     const file = files[index];
-    const part = parts[index];
+    const original = parts[index];
+    const part = original && edits ? { ...original, lines: original.lines.map((line) => ({
+      ...line,
+      speaker: edits.speakers[meeting.id]?.[edits.lineSpeakers[`${meeting.id}:${index}`]?.[line.time] ?? line.speaker] ?? line.speaker,
+      text: edits.lines[`${meeting.id}:${index}`]?.[line.time] ?? line.text,
+    })) } : original;
     return { key: `${meeting.id}:${index}`, meeting, index, file, part,
       title: count > 1 ? `${meeting.title} · запись ${index + 1}` : meeting.title,
       detail: part?.duration ?? (file?.type.startsWith("video/") ? "Видео" : file ? "Аудио" : meeting.detail),
@@ -124,6 +146,14 @@ function linkedRecording() {
 
 export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter, onSpaceFilter, focusedMeetingId, onAddRecording, onOpenKnowledgeNote, onAddSummary, onRenameNote, onRegenerateNote, onDeleteNote, onDeleteRecording, onCreateTemplate, searchRef }: Props) {
   const [query, setQuery] = useState("");
+  const [transcriptEdits, setTranscriptEdits] = useState<TranscriptEdits>(savedTranscriptEdits);
+  const [speakersOpen, setSpeakersOpen] = useState(false);
+  const [speakerDraft, setSpeakerDraft] = useState<Record<string, string>>({});
+  const [draftAddedSpeakers, setDraftAddedSpeakers] = useState<string[]>([]);
+  const [speakerLine, setSpeakerLine] = useState<{ key: string; time: string } | null>(null);
+  const [speakerError, setSpeakerError] = useState("");
+  const [lineEdit, setLineEdit] = useState<{ key: string; time: string; text: string } | null>(null);
+  const skipLineBlur = useRef(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(() => { const link = linkedRecording(); return link ? `${link.id}:${link.part}` : null; });
   const [tab, setTab] = useState<"transcript" | "summary">(() => linkedRecording()?.tab ?? "transcript");
   const [shareDialog, setShareDialog] = useState(false);
@@ -140,16 +170,17 @@ export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { localStorage.setItem(transcriptEditsKey, JSON.stringify(transcriptEdits)); }, [transcriptEdits]);
   const results = useMemo<Result[]>(() => meetings
     .filter((meeting) => spaceFilter === "all" || meeting.space === spaceFilter)
-    .flatMap(recordingsFor)
+    .flatMap((meeting) => recordingsFor(meeting, transcriptEdits))
     .map((recording) => ({ ...recording, hit: hitFor(recording.part, query) }))
     .filter((recording) => {
       const term = query.toLocaleLowerCase("ru").trim();
       if (!term) return true;
       const ownText = `${recording.title} ${recording.file?.name ?? ""} ${recording.meeting.topic} ${recording.detail}`.toLocaleLowerCase("ru");
       return !!recording.hit || ownText.includes(term) || notes.some((note) => note.summaryFor === recording.meeting.id && plainText(note.body ?? "").toLocaleLowerCase("ru").includes(term));
-    }), [meetings, notes, query, spaceFilter]);
+    }), [meetings, notes, query, spaceFilter, transcriptEdits]);
   const selected = results.find((result) => result.key === selectedKey)
     ?? results.find((result) => result.meeting.id === focusedMeetingId)
     ?? results[0];
@@ -160,6 +191,8 @@ export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter
   const playable = selected?.file;
   const demoDuration = selected?.meeting.id === 1 ? (selected.index === 0 ? 1722 : 1560) : (Number(selected?.part?.duration.match(/\d+/)?.[0] ?? 30) * 60);
   const deletingLastRecording = deleteTarget ? recordingsFor(deleteTarget.meeting).length === 1 : false;
+  const originalSpeakers = selected ? [...new Set(demoParts(selected.meeting.id).flatMap((part) => part.lines.map((line) => line.speaker)))] : [];
+  const speakerIds = [...originalSpeakers, ...draftAddedSpeakers];
 
   const hitTime = selectedHit?.time;
   useEffect(() => {
@@ -177,7 +210,56 @@ export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter
     setSelectedKey(result.key);
     setDemoSeek(null);
     setCopyState(null);
+    setLineEdit(null);
+    setSpeakersOpen(false);
     if (result.hit) setTab("transcript");
+  }
+
+  function openSpeakers(line: { key: string; time: string } | null = null) {
+    if (!selected) return;
+    const added = transcriptEdits.addedSpeakers[selected.meeting.id] ?? [];
+    setDraftAddedSpeakers(added);
+    setSpeakerDraft(Object.fromEntries([...originalSpeakers, ...added].map((speaker) => [speaker, transcriptEdits.speakers[selected.meeting.id]?.[speaker] ?? speaker])));
+    setSpeakerLine(line);
+    setSpeakerError("");
+    setSpeakersOpen(true);
+  }
+
+  function saveSpeakers(assignTo?: string) {
+    if (!selected) return;
+    const names = speakerIds.map((speaker) => speakerDraft[speaker]?.trim() ?? "");
+    if (names.some((name) => !name)) { setSpeakerError("Укажите имя для каждого участника"); return; }
+    if (new Set(names.map((name) => name.toLocaleLowerCase("ru"))).size !== names.length) { setSpeakerError("Имена участников должны различаться"); return; }
+    setTranscriptEdits((current) => {
+      const removed = new Set((current.addedSpeakers[selected.meeting.id] ?? []).filter((speaker) => !draftAddedSpeakers.includes(speaker)));
+      const lineSpeakers = Object.fromEntries(Object.entries(current.lineSpeakers).map(([key, lines]) => [key, key.startsWith(`${selected.meeting.id}:`) ? Object.fromEntries(Object.entries(lines).filter(([, speaker]) => !removed.has(speaker))) : lines]));
+      if (assignTo && speakerLine) lineSpeakers[speakerLine.key] = { ...lineSpeakers[speakerLine.key], [speakerLine.time]: assignTo };
+      return {
+        ...current,
+        speakers: { ...current.speakers, [selected.meeting.id]: Object.fromEntries(speakerIds.map((speaker, index) => [speaker, names[index]])) },
+        addedSpeakers: { ...current.addedSpeakers, [selected.meeting.id]: draftAddedSpeakers },
+        lineSpeakers,
+      };
+    });
+    setSpeakersOpen(false);
+  }
+
+  function addSpeaker() {
+    const id = `new-${Date.now()}`;
+    setDraftAddedSpeakers((current) => [...current, id]);
+    setSpeakerDraft((current) => ({ ...current, [id]: "" }));
+    setSpeakerError("");
+  }
+
+  function removeSpeaker(speaker: string) {
+    setDraftAddedSpeakers((current) => current.filter((id) => id !== speaker));
+    setSpeakerDraft((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== speaker)));
+  }
+
+  function saveLineEdit(edit: { key: string; time: string; text: string }) {
+    const text = edit.text.trim();
+    if (text) setTranscriptEdits((current) => ({ ...current, lines: { ...current.lines, [edit.key]: { ...current.lines[edit.key], [edit.time]: text } } }));
+    setLineEdit(null);
   }
 
   function jump(time: string) {
@@ -260,17 +342,32 @@ export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter
       <article className="recording-preview" aria-label="Предпросмотр записи">
         {selected ? <>
           <div className="recording-preview-head"><h2><SpaceDot name={selected.meeting.space} color={spaces.find((item) => item.name === selected.meeting.space)?.color} /><span>{selected.title}</span></h2></div>
-          <div className="recording-preview-tabs">
+          <div className={`recording-preview-tabs ${(tab === "summary" && !selectedSummary?.body?.trim()) || (tab === "transcript" && !selected.part) ? "compact-actions" : ""}`}>
             <div className="recording-tabs-scroll" role="tablist" aria-label="Содержимое записи">
               <button role="tab" aria-selected={tab === "transcript"} className={`recording-transcript-tab ${tab === "transcript" ? "active" : ""}`} onClick={() => { setTab("transcript"); setCopyState(null); }}>Транскрипт</button>
               <span className={`recording-summary-tab ${tab === "summary" ? "active" : ""}`} role="presentation">
                 {selectedSummary ? <NoteContextActions note={selectedSummary} templates={templates} canEdit={canEditSummary} onRename={onRenameNote} onRegenerate={onRegenerateNote} onDelete={onDeleteNote} onCreateTemplate={onCreateTemplate}>
-                  <button role="tab" aria-selected={tab === "summary"} title={canEditSummary ? "Резюме · правый клик для действий" : "Резюме"} onClick={() => { setTab("summary"); setCopyState(null); }}>Резюме</button>
-                </NoteContextActions> : <button role="tab" aria-selected={tab === "summary"} onClick={() => { setTab("summary"); setCopyState(null); }}>Резюме</button>}
+                  <button role="tab" aria-selected={tab === "summary"} title={canEditSummary ? "Резюме · правый клик для действий" : "Резюме"} onClick={() => { setTab("summary"); setCopyState(null); setSpeakersOpen(false); }}>Резюме</button>
+                </NoteContextActions> : <button role="tab" aria-selected={tab === "summary"} onClick={() => { setTab("summary"); setCopyState(null); setSpeakersOpen(false); }}>Резюме</button>}
               </span>
             </div>
             <div className="recording-tab-actions">
-              {((tab === "transcript" && selected.part) || (tab === "summary" && selectedSummary)) && <>
+              {tab === "transcript" && selected.part && canEditSummary && <Popover.Root open={speakersOpen} onOpenChange={setSpeakersOpen}>
+                <Popover.Anchor asChild><button type="button" onClick={() => speakersOpen ? setSpeakersOpen(false) : openSpeakers()} aria-expanded={speakersOpen} title="Переименовать или добавить участника"><UsersRound size={15} /><span>Участники</span></button></Popover.Anchor>
+                <Popover.Portal><Popover.Content align="end" sideOffset={9} className="recording-speakers-popover" aria-label="Участники встречи">
+                  <div className="recording-speakers-head"><h3>Участники</h3>{speakerLine && <span>Реплика {speakerLine.time}</span>}</div>
+                  <div className="recording-speakers-list">{speakerIds.map((speaker, index) => <div className="recording-speaker-field" key={speaker}>
+                    <span className="recording-speaker-number">{index + 1}</span>
+                    <label className="recording-speaker-input"><span>Участник {index + 1}</span><input value={speakerDraft[speaker] ?? ""} onChange={(event) => { setSpeakerDraft((current) => ({ ...current, [speaker]: event.target.value })); setSpeakerError(""); }} aria-label={`Имя участника ${index + 1}`} placeholder="Имя" /></label>
+                    {speakerLine && <button type="button" className="recording-speaker-assign" onClick={() => saveSpeakers(speaker)}>Назначить</button>}
+                    {draftAddedSpeakers.includes(speaker) && <button type="button" className="recording-speaker-remove" onClick={() => removeSpeaker(speaker)} aria-label={`Удалить участника ${index + 1}`} title="Удалить участника"><X size={14} /></button>}
+                  </div>)}</div>
+                  {speakerError && <p className="recording-template-error" role="alert">{speakerError}</p>}
+                  <button type="button" className="recording-speaker-add" onClick={addSpeaker}><Plus size={15} /> Добавить участника</button>
+                  <div className="recording-speakers-footer"><button type="button" onClick={() => setSpeakersOpen(false)}>Отмена</button><button type="button" onClick={() => saveSpeakers()}>Сохранить</button></div>
+                </Popover.Content></Popover.Portal>
+              </Popover.Root>}
+              {((tab === "transcript" && selected.part) || (tab === "summary" && selectedSummary?.body?.trim())) && <>
                 <button type="button" onClick={tab === "transcript" ? copyTranscript : () => { if (selectedSummary) void copy(summaryText(selectedSummary), "summary"); }} title={tab === "transcript" ? "Копировать текст транскрипта" : "Копировать текст резюме"} aria-label={tab === "transcript" ? "Копировать текст транскрипта" : "Копировать текст резюме"}>{copyState === tab ? <Check size={15} /> : <Copy size={15} />}<span>{copyState === tab ? "Скопировано" : "Копировать"}</span></button>
                 <button type="button" onClick={downloadCurrent} title={tab === "transcript" ? "Скачать транскрипт в формате TXT" : "Скачать резюме встречи в формате TXT"} aria-label={tab === "transcript" ? "Скачать транскрипт" : "Скачать резюме встречи"}><Download size={15} /><span>Скачать</span></button>
               </>}
@@ -278,18 +375,25 @@ export function RecordingsPage({ meetings, notes, spaces, templates, spaceFilter
             </div>
           </div>
           <div className="recording-player"><div className="recording-player-source"><span>{playable?.name ?? selected.part?.name ?? "Запись встречи"}</span></div>{playable?.url ? playable.type.startsWith("video/") ? <video ref={videoRef} key={playable.url} src={playable.url} controls preload="metadata" /> : <audio ref={audioRef} key={playable.url} src={playable.url} controls preload="metadata" /> : selected.part ? <DemoAudioPlayer key={`${selected.key}:${demoSeek?.token ?? 0}`} durationSeconds={demoDuration} seekRequest={demoSeek} /> : <p className="recording-file-missing">Файл недоступен после перезагрузки.</p>}</div>
-          {relatedNotes.length > 0 && <div className="recording-knowledge-links">
-            <DropdownMenu><DropdownMenuTrigger asChild><button aria-label="Связанные документы пространства"><span>Связанные документы</span><ChevronDown size={13} strokeWidth={1.7} aria-hidden="true" /></button></DropdownMenuTrigger><DropdownMenuContent align="start" className="recording-related-documents">{relatedNotes.map((note) => <DropdownMenuItem key={note.id} onSelect={() => onOpenKnowledgeNote(note)}><FileText size={15} strokeWidth={1.6} />{note.title}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
+          {(selectedSummary || relatedNotes.length > 0) && <div className="recording-knowledge-links">
+            {selectedSummary && <button onClick={() => onOpenKnowledgeNote(selectedSummary)} aria-label={`Открыть заметку-резюме «${selectedSummary.title}»`}><FileText size={15} strokeWidth={1.6} /><span>Заметка: {selectedSummary.title}</span><ArrowRight size={14} /></button>}
+            {relatedNotes.length > 0 && <DropdownMenu><DropdownMenuTrigger asChild><button aria-label="Связанные документы пространства"><span>Связанные документы</span><ChevronDown size={13} strokeWidth={1.7} aria-hidden="true" /></button></DropdownMenuTrigger><DropdownMenuContent align="start" className="recording-related-documents">{relatedNotes.map((note) => <DropdownMenuItem key={note.id} onSelect={() => onOpenKnowledgeNote(note)}><FileText size={15} strokeWidth={1.6} />{note.title}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>}
           </div>}
           {tab === "transcript" ? <div className="recording-transcript" ref={transcriptRef} role="tabpanel">
-            {selected.part ? selected.part.lines.map((line) => <button className={`recording-line ${selectedHit?.time === line.time ? "match" : ""}`} key={line.time} onClick={() => jump(line.time)}><time>{line.time}</time><span className="recording-line-content"><span className="recording-line-speaker">{line.speaker}</span><span><Highlight text={line.text} query={query} /></span></span></button>) : <div className="recording-content-empty"><h3>Расшифровка пока недоступна</h3><p>В рабочем сервисе она создаётся автоматически. В прототипе обработка не запускается.</p></div>}
-          </div> : <div className="recording-summary" role="tabpanel">{selectedSummary ? <div className="recording-summary-body"><KnowledgeBody html={selectedSummary.body ?? ""} title={selectedSummary.title} /></div> : <div className="recording-content-empty"><h3>Резюме пока нет</h3>{canEditSummary && <button onClick={() => setSummaryDialog(true)}>Создать по шаблону <ArrowRight size={16} /></button>}</div>}</div>}
+            {selected.part ? selected.part.lines.map((line) => <div className={`recording-line ${selectedHit?.time === line.time ? "match" : ""} ${lineEdit?.key === selected.key && lineEdit.time === line.time ? "editing" : ""}`} key={line.time}>
+              <button type="button" className="recording-line-time" onClick={() => jump(line.time)} title="Перейти к моменту записи">{line.time}</button>
+              <span className="recording-line-content">
+                {canEditSummary ? <button type="button" className="recording-line-speaker" onClick={() => openSpeakers({ key: selected.key, time: line.time })} title="Назначить или переименовать участника">{line.speaker}</button> : <span className="recording-line-speaker">{line.speaker}</span>}
+                {lineEdit?.key === selected.key && lineEdit.time === line.time ? <textarea className="recording-line-editor" autoFocus value={lineEdit.text} rows={Math.max(2, Math.ceil(lineEdit.text.length / 70))} aria-label={`Текст реплики ${line.time}`} onChange={(event) => setLineEdit({ ...lineEdit, text: event.target.value })} onBlur={() => { if (skipLineBlur.current) { skipLineBlur.current = false; return; } saveLineEdit(lineEdit); }} onKeyDown={(event) => { if (event.key === "Escape") { skipLineBlur.current = true; setLineEdit(null); } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { saveLineEdit(lineEdit); } }} /> : canEditSummary ? <button type="button" className="recording-line-text" onClick={() => setLineEdit({ key: selected.key, time: line.time, text: line.text })} title="Нажмите, чтобы исправить расшифровку"><Highlight text={line.text} query={query} /></button> : <span className="recording-line-text"><Highlight text={line.text} query={query} /></span>}
+              </span>
+            </div>) : <div className="recording-content-empty"><h3>Расшифровка пока недоступна</h3><p>В рабочем сервисе она создаётся автоматически. В прототипе обработка не запускается.</p></div>}
+          </div> : <div className="recording-summary" role="tabpanel">{selectedSummary?.body ? <div className="recording-summary-body"><KnowledgeBody html={selectedSummary.body} title={selectedSummary.title} /></div> : <div className="recording-content-empty"><h3>{selectedSummary ? "Заметка-резюме создана" : "Резюме пока нет"}</h3><p>{selectedSummary ? "Она уже связана с этой записью. В прототипе текст не генерируется автоматически." : "Создайте резюме по шаблону для этой встречи."}</p>{canEditSummary && <button onClick={() => setSummaryDialog(true)}>Создать черновик по шаблону <ArrowRight size={16} /></button>}</div>}</div>}
         </> : <div className="recordings-no-selection">Выберите запись слева.</div>}
       </article>
     </div>
     <Dialog open={summaryDialog} onOpenChange={(open) => { setSummaryDialog(open); if (!open) setTemplateError(""); }}>
       <DialogContent className="lorym-dialog recording-summary-dialog">
-        <DialogHeader><DialogTitle>Создать резюме встречи</DialogTitle><DialogDescription>Выберите шаблон. Резюме появится рядом с транскриптом.</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>{selectedSummary ? "Составить резюме по шаблону" : "Создать резюме встречи"}</DialogTitle><DialogDescription>Результат сохранится в заметке, связанной с этой записью.</DialogDescription></DialogHeader>
         <label>Шаблон
           <select value={template} onChange={(event) => { setTemplate(event.target.value); setTemplateError(""); }}>
             {templates.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}

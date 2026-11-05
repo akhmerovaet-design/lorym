@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, AudioLines, Check, LayoutTemplate, ListTodo, Menu, Plus, Search, Upload, X } from "lucide-react";
+import { ArrowRight, AudioLines, Check, LayoutTemplate, ListTodo, Menu, NotebookPen, Plus, Search, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,14 +14,17 @@ import { TasksBoard } from "@/TasksBoard";
 import { SpaceFilter } from "@/SpaceFilter";
 import { SpaceLibrary } from "@/SpaceLibrary";
 import { RecordingsPage } from "@/RecordingsPage";
+import { NotesPage } from "@/NotesPage";
 import { type FolderInfo, type Kind, type Material, type TemplateInfo } from "@/model";
-import { defaultSpaceColor, type SpaceColor } from "@/spaceColors";
+import { defaultSpaceColor } from "@/spaceColors";
 import { searchableMaterialText } from "@/materialSearch";
-import { deleteFile, saveFile } from "@/fileStorage";
+import { deleteFile, readFile, saveFile } from "@/fileStorage";
 
-type View = "home" | "spaces" | "overview" | "materials" | "meetings" | "note-editor" | "file-preview" | "topics" | "templates" | "tasks";
+type View = "home" | "spaces" | "overview" | "materials" | "meetings" | "notes" | "note-editor" | "file-preview" | "topics" | "templates" | "tasks";
 type NavigationSnapshot = { view: View; space: string; folderId: string | null; spaceFilter: string; query: string; topic: string; filter: "all" | Kind; activeMeetingId: number | null; activeFileId: number | null; editingNoteId: number | null; noteReturnMeetingId: number | null };
 type Breadcrumb = { key: string; label: string; onClick: () => void };
+
+const isMediaFile = (file: File) => /^(audio|video)\//.test(file.type) || /\.(mp3|wav|m4a|aac|ogg|webm|mp4|mov|mkv|avi|flac)$/i.test(file.name);
 
 const seed: Material[] = [
   { id: 1, kind: "meeting", title: "Планирование запуска", detail: "2 записи · презентация · 54 мин", date: "Сегодня, 10:42", topic: "Запуск продукта", space: "Рабочее", searchText: "конверсия первого запуска метрики сценарий транскрипт план сегменты запись созвона часть 1 часть 2 презентация запуска pdf" },
@@ -40,7 +43,7 @@ const initialFolders: FolderInfo[] = [
   { id: "personal-plans", space: "Личное", name: "Планы", parentId: null },
 ];
 
-const viewNames: Record<View, string> = { home: "Главная", spaces: "Мои пространства", overview: "Обзор", materials: "Материалы", meetings: "Записи", "note-editor": "Редактор документа", "file-preview": "Файл", topics: "Темы", templates: "Шаблоны", tasks: "Задачи" };
+const viewNames: Record<View, string> = { home: "Главная", spaces: "Мои пространства", overview: "Обзор", materials: "Материалы", meetings: "Записи", notes: "Заметки", "note-editor": "Редактор документа", "file-preview": "Файл", topics: "Темы", templates: "Шаблоны", tasks: "Задачи" };
 const initialSpaces: SpaceInfo[] = [
   { name: "Рабочее", kind: "personal", cover: "work", coverImage: "/covers/work-editorial.jpg", access: "edit", color: "rose" },
   { name: "Личное", kind: "personal", cover: "personal", access: "edit", color: "sage" },
@@ -50,6 +53,28 @@ const templates: TemplateInfo[] = [
   { name: "Конспект лекции", description: "Тезисы, определения и примеры", availableIn: ["Рабочее", "Личное"] },
   { name: "Исследовательское интервью", description: "Цитаты, барьеры и наблюдения", availableIn: ["Рабочее"] },
 ];
+const dismissedAutoSummariesKey = "lorym-prototype-dismissed-auto-summaries";
+
+function dismissedAutoSummaries() {
+  try { return new Set(JSON.parse(localStorage.getItem(dismissedAutoSummariesKey) ?? "[]") as number[]); }
+  catch { return new Set<number>(); }
+}
+
+function withAutomaticSummaries(items: Material[], dismissed = dismissedAutoSummaries()) {
+  const usedIds = new Set(items.map((item) => item.id));
+  const summarized = new Set(items.filter((item) => item.kind === "note" && item.summaryFor).map((item) => item.summaryFor));
+  const created: Material[] = [];
+  let nextId = Date.now() * 1000 + 500;
+  for (const meeting of items) {
+    if (meeting.kind !== "meeting" || summarized.has(meeting.id) || dismissed.has(meeting.id)) continue;
+    while (usedIds.has(nextId)) nextId += 1;
+    created.push({ id: nextId, kind: "note", title: meeting.title, detail: "Резюме встречи", date: "Только что", createdAt: Date.now(), topic: meeting.topic, space: meeting.space, folderId: meeting.folderId ?? null, sourceIds: [meeting.id], summaryFor: meeting.id, body: "" });
+    usedIds.add(nextId);
+    summarized.add(meeting.id);
+    nextId += 1;
+  }
+  return created.length ? [...created, ...items] : items;
+}
 
 function oneSummaryPerMeeting(items: Material[]): Material[] {
   const seen = new Set<number>();
@@ -118,12 +143,14 @@ function App() {
       const available = savedSpaces?.map((item) => item.name) ?? initialSpaces.map((item) => item.name);
       const restored = [...saved.filter((item) => item.kind === "note" && item.id > 6 && available.includes(item.space)), ...savedMeetings.filter((item) => item.kind === "meeting" && item.id > 6 && available.includes(item.space)), ...savedFiles.filter((item) => item.kind === "file" && available.includes(item.space)), ...seed.map((item) => ({ ...item, ...(item.kind === "note" ? noteOverrides[item.id] : meetingOverrides[item.id]), space: locations[item.id] ?? item.space, folderId: folderLocations[item.id] !== undefined ? folderLocations[item.id] : item.folderId })).filter((item) => available.includes(item.space) && !(item.kind === "note" && deletedSeedNotes.has(item.id)) && !(item.kind === "meeting" && deletedSeedMeetings.has(item.id)))];
       const meetingIds = new Set(restored.filter((item) => item.kind === "meeting").map((item) => item.id));
-      return oneSummaryPerMeeting(restored.map((item) => {
+      const dismissed = dismissedAutoSummaries();
+      seed.filter((item) => item.kind === "note" && item.summaryFor && deletedSeedNotes.has(item.id)).forEach((item) => dismissed.add(item.summaryFor!));
+      return withAutomaticSummaries(oneSummaryPerMeeting(restored.map((item) => {
         if (item.kind !== "note") return item;
         const sourceIds = item.sourceIds?.filter((id) => meetingIds.has(id));
         return { ...item, sourceIds, summaryFor: item.summaryFor && meetingIds.has(item.summaryFor) ? item.summaryFor : undefined };
-      }));
-    } catch { return seed; }
+      })), dismissed);
+    } catch { return withAutomaticSummaries(seed); }
   });
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [activeMeetingId, setActiveMeetingId] = useState<number | null>(() => linkedRecordingId());
@@ -161,6 +188,8 @@ function App() {
   const [targetSpace, setTargetSpace] = useState("Рабочее");
   const [targetFolderId, setTargetFolderId] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [transcribeFlags, setTranscribeFlags] = useState<boolean[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [draggingFile, setDraggingFile] = useState(false);
   const recordingInputRef = useRef<HTMLInputElement>(null);
   const recordingTargetRef = useRef<{ space: string; folderId: string }>({ space: "Рабочее", folderId: "" });
@@ -195,7 +224,7 @@ function App() {
   const defaultEditableSpace = canEditSpace ? space : spaces.find((item) => item.access === "edit")?.name ?? "";
   const editingNote = materials.find((item) => item.id === editingNoteId && item.kind === "note");
   const activeFile = materials.find((item) => item.id === activeFileId && item.kind === "file");
-  const globalList = ["materials", "meetings", "topics"].includes(view);
+  const globalList = ["materials", "meetings", "notes", "topics"].includes(view);
   const createSpace = globalList && spaceFilter !== "all" ? spaceFilter : space;
   const canCreateMaterial = spaces.some((item) => item.name === createSpace && item.access === "edit");
   const listSource = globalList ? materials.filter((item) => spaces.some((target) => target.name === item.space) && (spaceFilter === "all" || item.space === spaceFilter)) : scoped;
@@ -264,7 +293,7 @@ function App() {
     setMobileNav(false);
     window.scrollTo(0, 0);
   }
-  function openCollection(next: "materials" | "meetings" | "templates" | "tasks") {
+  function openCollection(next: "materials" | "meetings" | "notes" | "templates" | "tasks") {
     setSpaceFilter("all");
     if (next === "meetings") setActiveMeetingId(null);
     changeView(next);
@@ -333,9 +362,18 @@ function App() {
     setTargetSpace(initialSpace);
     setTargetFolderId(folderId);
     setSelectedFiles(files);
+    setTranscribeFlags(files.map(isMediaFile));
     setNewTitle("");
     setCreateError("");
     setCreateOpen(true);
+  }
+  function chooseUploadFiles(files: File[]) {
+    const additions = files.filter((file) => !selectedFiles.some((existing) => existing.name === file.name && existing.size === file.size && existing.lastModified === file.lastModified));
+    if (additions.length) {
+      setSelectedFiles((previous) => [...previous, ...additions]);
+      setTranscribeFlags((previous) => [...previous, ...additions.map(isMediaFile)]);
+    }
+    setCreateError("");
   }
   function createNote(initialTitle = "Новый конспект", targetSpace = space, sourceIds: number[] = [], folderId: string | null = null) {
     if (!spaces.some((item) => item.name === targetSpace && item.access === "edit")) {
@@ -347,17 +385,19 @@ function App() {
     const sources = materials.filter((item) => item.kind === "meeting" && sourceIds.includes(item.id) && item.space === targetSpace);
     const sharedTopic = sources.length && sources.every((item) => item.topic === sources[0].topic) ? sources[0].topic : "Без темы";
     const sharedFolder = sources.length && sources.every((item) => item.folderId === sources[0].folderId) ? sources[0].folderId : null;
-    const note: Material = { id, kind: "note", title: initialTitle, detail: sourceIds.length ? `${sourceIds.length} ${sourceIds.length === 1 ? "встреча" : sourceIds.length < 5 ? "встречи" : "встреч"}` : "Черновик", date: "Только что", topic: sharedTopic, space: targetSpace, folderId: folderId ?? sharedFolder, sourceIds, body: "" };
+    const note: Material = { id, kind: "note", title: initialTitle, detail: sourceIds.length ? `${sourceIds.length} ${sourceIds.length === 1 ? "встреча" : sourceIds.length < 5 ? "встречи" : "встреч"}` : "Черновик", date: "Только что", createdAt: id, topic: sharedTopic, space: targetSpace, folderId: folderId ?? sharedFolder, sourceIds, body: "" };
     setMaterials((previous) => [note, ...previous]);
     setSpace(targetSpace);
     setEditingNoteId(id);
     changeView("note-editor");
   }
   function addSummary(meeting: Material, templateName: string, focus: string) {
+    const dismissed = dismissedAutoSummaries();
+    if (dismissed.delete(meeting.id)) localStorage.setItem(dismissedAutoSummariesKey, JSON.stringify([...dismissed]));
     const current = materials.find((item) => item.kind === "note" && item.summaryFor === meeting.id);
     const id = current?.id ?? Date.now();
     const draft = draftFromSources([meeting.id], templateName, focus);
-    const note: Material = { id, kind: "note", title: current?.title ?? meeting.title, detail: "Резюме встречи", date: "Только что", topic: meeting.topic, space: meeting.space, folderId: meeting.folderId ?? null, sourceIds: [meeting.id], summaryFor: meeting.id, templateName, ...draft };
+    const note: Material = { id, kind: "note", title: current?.title ?? meeting.title, detail: "Резюме встречи", date: "Только что", createdAt: current?.createdAt ?? Date.now(), topic: meeting.topic, space: meeting.space, folderId: meeting.folderId ?? null, sourceIds: [meeting.id], summaryFor: meeting.id, templateName, ...draft };
     setMaterials((previous) => current ? previous.map((item) => item.id === current.id ? note : item) : [note, ...previous]);
     notify("Резюме встречи создано как черновик");
     return id;
@@ -375,6 +415,11 @@ function App() {
   }
   function deleteNote(note: Material) {
     if (!spaces.some((item) => item.name === note.space && item.access === "edit")) return;
+    if (note.summaryFor) {
+      const dismissed = dismissedAutoSummaries();
+      dismissed.add(note.summaryFor);
+      localStorage.setItem(dismissedAutoSummariesKey, JSON.stringify([...dismissed]));
+    }
     if (note.id <= 6) {
       const deleted = new Set(JSON.parse(localStorage.getItem("lorym-prototype-deleted-seed-notes") ?? "[]") as number[]);
       deleted.add(note.id);
@@ -445,10 +490,23 @@ function App() {
       searchText: files.map((file) => file.name).join(" "),
       sourceFiles: files.map((file) => ({ name: file.name, url: URL.createObjectURL(file), type: file.type })),
     };
-    setMaterials((previous) => [item, ...previous]);
+    setMaterials((previous) => withAutomaticSummaries([item, ...previous]));
     setProcessingStage(0);
     setProcessingRecord({ id, title: item.title, source: "file" });
     openDetail(item);
+  }
+  async function transcribeStoredFile(item: Material) {
+    if (item.kind !== "file" || !spaces.some((target) => target.name === item.space && target.access === "edit")) return;
+    try {
+      const blob = await readFile(item.id);
+      if (!blob) { notify("Файл не найден в этом браузере"); return; }
+      const name = item.fileName ?? item.title;
+      const recording: Material = { ...item, kind: "meeting", title: name.replace(/\.[^.]+$/, ""), detail: "Запись", sourceFiles: [{ name, type: item.fileType ?? blob.type, url: URL.createObjectURL(blob) }], searchText: name };
+      setMaterials((previous) => withAutomaticSummaries(previous.map((candidate) => candidate.id === item.id ? recording : candidate)));
+      setProcessingStage(0);
+      setProcessingRecord({ id: recording.id, title: recording.title, source: "file" });
+      openDetail(recording);
+    } catch { notify("Не удалось открыть файл для расшифровки"); }
   }
   function addSpace(next: SpaceInfo) {
     setAllSpaces((previous) => [...previous, next]);
@@ -470,6 +528,11 @@ function App() {
     if (spaceFilter === oldName) setSpaceFilter(nextName);
     if (targetSpace === oldName) setTargetSpace(nextName);
     setNavigationHistory((previous) => previous.map((item) => ({ ...item, space: item.space === oldName ? nextName : item.space, spaceFilter: item.spaceFilter === oldName ? nextName : item.spaceFilter })));
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("space") === oldName) {
+      url.searchParams.set("space", nextName);
+      window.history.replaceState(window.history.state, "", url);
+    }
     notify("Пространство переименовано");
   }
   function trashSpace(name: string) {
@@ -540,7 +603,12 @@ function App() {
     setSpaceFilter("all");
     changeView("meetings", view === "meetings");
   }
-  function openKnowledgeNote(note: Material) { openDetail(note); }
+  function openKnowledgeNote(note: Material) {
+    setSpace(note.space);
+    setSpaceFilter(note.space);
+    setEditingNoteId(note.id);
+    changeView("notes");
+  }
   function openGlobalMaterial(id: number) {
     const item = materials.find((candidate) => candidate.id === id);
     if (!item) return;
@@ -555,22 +623,38 @@ function App() {
       if (!selectedFiles.length) { setCreateError("Выберите файлы для загрузки"); return; }
       const baseId = Date.now() * 1000;
       const uploaded: number[] = [];
+      const createdUrls: string[] = [];
+      setUploading(true);
       try {
         const nextFiles: Material[] = [];
         for (const [index, file] of selectedFiles.entries()) {
           const id = baseId + index;
+          if (isMediaFile(file) && transcribeFlags[index]) {
+            const url = URL.createObjectURL(file);
+            createdUrls.push(url);
+            nextFiles.push({ id, kind: "meeting", title: file.name.replace(/\.[^.]+$/, ""), detail: "Запись", date: "Только что", topic: "Без темы", space: targetSpace, folderId: targetFolderId || null, searchText: file.name, sourceFiles: [{ name: file.name, url, type: file.type }] });
+            continue;
+          }
           await saveFile(id, file);
           uploaded.push(id);
           const isText = file.type.startsWith("text/") || /\.(txt|md|csv|json)$/i.test(file.name);
           const searchText = isText ? (await file.text()).slice(0, 20_000) : "";
           nextFiles.push({ id, kind: "file", title: file.name, detail: "Файл", date: "Только что", topic: "Без темы", space: targetSpace, folderId: targetFolderId || null, fileName: file.name, fileType: file.type, fileSize: file.size, searchText });
         }
-        setMaterials((previous) => [...nextFiles, ...previous]);
-        setCreateOpen(false); setSelectedFiles([]); setCreateError("");
-        notify(nextFiles.length === 1 ? "Файл добавлен в пространство" : `${nextFiles.length} файла добавлены в пространство`);
+        setMaterials((previous) => withAutomaticSummaries([...nextFiles, ...previous]));
+        setCreateOpen(false); setSelectedFiles([]); setTranscribeFlags([]); setCreateError("");
+        const firstRecording = nextFiles.find((item) => item.kind === "meeting");
+        if (firstRecording) {
+          setProcessingStage(0);
+          setProcessingRecord({ id: firstRecording.id, title: nextFiles.filter((item) => item.kind === "meeting").length > 1 ? `${nextFiles.filter((item) => item.kind === "meeting").length} записи` : firstRecording.title, source: "file" });
+          openDetail(firstRecording);
+        } else notify(nextFiles.length === 1 ? "Файл добавлен" : "Файлы добавлены");
       } catch {
         await Promise.allSettled(uploaded.map((id) => deleteFile(id)));
+        createdUrls.forEach(URL.revokeObjectURL);
         setCreateError("Не удалось сохранить файл в браузере. Проверьте свободное место и попробуйте снова.");
+      } finally {
+        setUploading(false);
       }
       return;
     }
@@ -604,7 +688,7 @@ function App() {
         ? selectedFiles.map((file) => ({ name: file.name, url: URL.createObjectURL(file), type: file.type }))
         : [{ name: value, url: value, type: "text/uri-list" }],
     };
-    setMaterials((previous) => [item, ...previous]);
+    setMaterials((previous) => withAutomaticSummaries([item, ...previous]));
     setCreateOpen(false); setNewTitle(""); setSelectedFiles([]); setCreateError("");
     openDetail(item);
     setProcessingStage(0);
@@ -629,13 +713,6 @@ function App() {
     if (!item || (folderId && !folders.some((folder) => folder.id === folderId && folder.space === item.space))) return;
     setMaterials((previous) => previous.map((candidate) => candidate.id === id ? { ...candidate, folderId } : candidate));
     notify("Материал перемещён");
-  }
-  function changeCover(image: string | undefined) {
-    setAllSpaces((previous) => previous.map((item) => item.name === space ? { ...item, coverImage: image ?? "" } : item));
-    notify(image ? "Обложка обновлена" : "Обложка убрана");
-  }
-  function changeSpaceColor(color: SpaceColor) {
-    setAllSpaces((previous) => previous.map((item) => item.name === space ? { ...item, color } : item));
   }
   function openTemplate(name = "", instructions = "") {
     setEditingTemplate(name || null);
@@ -696,6 +773,7 @@ function App() {
         <SpaceTree spaces={spaces} currentSpace={space} isSpaceView={["overview", "note-editor", "file-preview"].includes(view)} isCatalogView={view === "spaces"} onNavigate={openSpace} onOpenCatalog={() => changeView("spaces")} onAdd={startSpaceCreation} onDropMaterial={requestMove} />
         <div className="sidebar-nav-gap" />
         <button className={`nav-item nav-item-with-icon ${view === "meetings" ? "active" : ""}`} onClick={() => openCollection("meetings")}><AudioLines size={18} strokeWidth={1.7} aria-hidden="true" />Записи</button>
+        <button className={`nav-item nav-item-with-icon ${view === "notes" ? "active" : ""}`} onClick={() => openCollection("notes")}><NotebookPen size={18} strokeWidth={1.7} aria-hidden="true" />Заметки</button>
         <button className={`nav-item nav-item-with-icon ${view === "templates" ? "active" : ""}`} onClick={() => openCollection("templates")}><LayoutTemplate size={18} strokeWidth={1.7} aria-hidden="true" />Шаблоны</button>
         <button className={`nav-item nav-item-with-icon ${view === "tasks" ? "active" : ""}`} onClick={() => openCollection("tasks")}><ListTodo size={18} strokeWidth={1.7} aria-hidden="true" />Задачи</button>
       </nav>
@@ -706,7 +784,7 @@ function App() {
     <div className={`workspace ${view === "spaces" ? "catalog-workspace" : ""} ${view === "note-editor" ? "note-workspace" : ""}`}>
       <header className="topbar">
         <button className="menu-button" aria-label="Открыть меню" onClick={() => setMobileNav(true)}><Menu size={21} /></button>
-        <span className="top-location">{["spaces", "home", "materials", "meetings", "templates", "tasks", "topics"].includes(view) ? viewNames[view] : <>{space}<span className="slash">/</span>{viewNames[view]}</>}</span>
+        <span className="top-location">{["spaces", "home", "materials", "meetings", "notes", "templates", "tasks", "topics"].includes(view) ? viewNames[view] : <>{space}<span className="slash">/</span>{viewNames[view]}</>}</span>
         <div className="top-actions">{view !== "spaces" && view !== "home" && view !== "templates" && view !== "note-editor" && <button className="top-search" aria-label="Перейти к поиску" onClick={() => searchRef.current?.focus()}><Search size={18} /></button>}<span className="top-avatar">Э</span></div>
       </header>
 
@@ -734,13 +812,12 @@ function App() {
           onCreateHandled={() => setSpaceCreateRequested(false)}
         /> : view === "overview" ? <SpaceLibrary
           key={space} space={space} folderId={folderId} onFolderChange={changeFolder}
-          spaceInfo={spaces.find((item) => item.name === space)} materials={scoped}
+          spaceInfo={spaces.find((item) => item.name === space)} spaceNames={allSpaces.map((item) => item.name)} materials={scoped}
           folders={folders.filter((item) => item.space === space)} onOpenMaterial={openDetail}
           onUploadFile={(folderId) => openCreate("document-upload", space, [], folderId ?? "")}
-          onAddRecording={(folderId) => openCreate("file", space, [], folderId ?? "")}
           onNewNote={(folderId) => createNote("Новый документ", space, [], folderId)}
           onAddFolder={addFolder} onRenameFolder={renameFolder} onDeleteFolder={deleteFolder}
-          onMoveToFolder={moveToFolder} onChangeCover={changeCover} onChangeColor={changeSpaceColor}
+          onMoveToFolder={moveToFolder} onUpdateSpace={updateSpace} onRenameSpace={renameSpace}
           onOpenTemplates={() => openCollection("templates")}
         /> : view === "meetings" ? <RecordingsPage
           meetings={materials.filter((item) => item.kind === "meeting" && spaces.some((target) => target.name === item.space))}
@@ -751,12 +828,20 @@ function App() {
           onRenameNote={renameNote} onRegenerateNote={regenerateNote} onDeleteNote={deleteNote}
           onDeleteRecording={deleteRecording}
           onCreateTemplate={createTemplateFromRecording} searchRef={searchRef}
+        /> : view === "notes" ? <NotesPage
+          notes={materials.filter((item) => item.kind === "note" && spaces.some((target) => target.name === item.space))}
+          meetings={materials.filter((item) => item.kind === "meeting" && spaces.some((target) => target.name === item.space))}
+          spaces={spaces} templates={savedTemplates} spaceFilter={spaceFilter} onSpaceFilter={setSpaceFilter}
+          focusedNoteId={editingNoteId} onAddNote={(target) => createNote("Новая заметка", target)}
+          onOpenNote={openDetail} onOpenMeeting={openDetail}
+          onRenameNote={renameNote} onRegenerateNote={regenerateNote} onDeleteNote={deleteNote}
+          onCreateTemplate={createTemplateFromRecording} searchRef={searchRef}
         /> : view === "note-editor" && editingNote ? <NoteEditor
           key={editingNote.id} note={editingNote} spaceColor={spaces.find((item) => item.name === editingNote.space)?.color}
           meetings={materials.filter((item) => item.kind === "meeting" && item.space === editingNote.space)}
           topics={Array.from(new Set(materials.filter((item) => item.space === editingNote.space && item.topic !== "Без темы").map((item) => item.topic)))}
           onChange={updateNote} onDone={goBack} onOpenMeeting={(meeting) => openDetail(meeting)}
-        /> : view === "file-preview" && activeFile ? <FilePage file={activeFile} spaceColor={spaces.find((item) => item.name === activeFile.space)?.color}
+        /> : view === "file-preview" && activeFile ? <FilePage file={activeFile} spaceColor={spaces.find((item) => item.name === activeFile.space)?.color} canEdit={spaces.some((item) => item.name === activeFile.space && item.access === "edit")} onTranscribe={() => void transcribeStoredFile(activeFile)}
         /> : <>
         <div className="page-head">
           <h1>{viewNames[view]}</h1>
@@ -793,15 +878,15 @@ function App() {
         <ol className="processing-steps">
           {[processingRecord?.source === "link" ? "Получение ссылки" : "Загрузка файла", "Расшифровка", "Резюме встречи"].map((label, index) => <li key={label} className={index === 0 && processingStage > 0 ? "complete" : processingStage === index ? "current" : ""}><span className="processing-step-mark">{index === 0 && processingStage > 0 ? <Check size={15} /> : String(index + 1).padStart(2, "0")}</span><span>{label}</span></li>)}
         </ol>
-        <p className="processing-note">{processingStage === 3 ? "Это демонстрация процесса. Транскрипт и резюме в прототипе не создаются." : "Демонстрация процесса: реальная расшифровка в прототипе не выполняется."}</p>
+        <p className="processing-note">{processingStage === 3 ? "Заметка-резюме создана и связана с записью. Транскрипт и текст резюме в прототипе не генерируются." : "Демонстрация процесса: реальная расшифровка в прототипе не выполняется."}</p>
         <div className="dialog-actions"><Button onClick={() => setProcessingRecord(null)}>{processingStage === 3 ? "Открыть запись" : "Перейти к записи"}</Button></div>
       </DialogContent>
     </Dialog>
 
-    <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+    <Dialog open={createOpen} onOpenChange={(open) => { if (!uploading) setCreateOpen(open); }}>
       <DialogContent className={`lorym-dialog create-dialog ${createMode === "document-upload" ? "document-upload-dialog" : ""}`}>
         <DialogHeader>
-          <DialogTitle>{createMode === "note" ? "Новый документ" : createMode === "document-upload" ? "Загрузить файл" : "Добавить запись"}</DialogTitle>
+          <DialogTitle>{createMode === "note" ? "Новый документ" : createMode === "document-upload" ? "Загрузить файлы" : "Добавить запись"}</DialogTitle>
           {createMode === "document-upload" ? <DialogDescription className="sr-only">Файлы будут добавлены в открытое пространство и папку.</DialogDescription> : <DialogDescription>{createMode === "note" ? "Документ будет сохранён в выбранном пространстве." : createMode === "link" ? "Ссылка создаст встречу в выбранном пространстве. В прототипе обработка не запускается." : "Аудио и презентацию одного созвона можно добавить вместе. В прототипе файлы доступны до перезагрузки, расшифровка не запускается."}</DialogDescription>}
         </DialogHeader>
         {createMode === "note" && <label className="create-space">Пространство
@@ -810,21 +895,21 @@ function App() {
           </select>
         </label>}
         {createMode === "file" || createMode === "document-upload" ? <>
-          <input ref={fileRef} type="file" multiple className="sr-only" tabIndex={-1} aria-hidden="true" accept={createMode === "file" ? "audio/*,video/*,.pdf,.ppt,.pptx" : ".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,image/*"} onChange={(event) => { setSelectedFiles(Array.from(event.target.files ?? [])); setCreateError(""); event.target.value = ""; }} />
-          {createMode === "document-upload" ? <div className={`upload-area ${draggingFile ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDraggingFile(true); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDraggingFile(false); }} onDrop={(event) => { event.preventDefault(); setDraggingFile(false); setSelectedFiles(Array.from(event.dataTransfer.files)); setCreateError(""); }}>
+          <input ref={fileRef} type="file" multiple className="sr-only" tabIndex={-1} aria-hidden="true" accept={createMode === "file" ? "audio/*,video/*,.pdf,.ppt,.pptx" : "audio/*,video/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.json,image/*"} onChange={(event) => { chooseUploadFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
+          {createMode === "document-upload" ? <div className={`upload-area ${draggingFile ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDraggingFile(true); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDraggingFile(false); }} onDrop={(event) => { event.preventDefault(); setDraggingFile(false); chooseUploadFiles(Array.from(event.dataTransfer.files)); }}>
             <Upload size={30} strokeWidth={1.6} aria-hidden="true" />
             <strong>Перетащите файлы сюда</strong>
-            <span>PDF, Word, презентации, таблицы и изображения</span>
+            <span>Аудио, видео, документы и изображения</span>
             <Button type="button" onClick={() => fileRef.current?.click()}>Выбрать файлы</Button>
-          </div> : <button className={`upload-area ${draggingFile ? "dragging" : ""}`} onClick={() => fileRef.current?.click()} onDragOver={(event) => { event.preventDefault(); setDraggingFile(true); }} onDragLeave={() => setDraggingFile(false)} onDrop={(event) => { event.preventDefault(); setDraggingFile(false); setSelectedFiles(Array.from(event.dataTransfer.files)); setCreateError(""); }}>
+          </div> : <button className={`upload-area ${draggingFile ? "dragging" : ""}`} onClick={() => fileRef.current?.click()} onDragOver={(event) => { event.preventDefault(); setDraggingFile(true); }} onDragLeave={() => setDraggingFile(false)} onDrop={(event) => { event.preventDefault(); setDraggingFile(false); chooseUploadFiles(Array.from(event.dataTransfer.files)); }}>
             <Upload size={22} strokeWidth={1.7} />
             <strong>Выбрать файлы</strong>
             <span>или перетащить сюда аудио, видео, презентацию</span>
           </button>}
-          {selectedFiles.length > 0 && <div className="create-file-list" aria-label="Выбранные файлы">{selectedFiles.map((file, index) => <div key={`${file.name}-${index}`}><span>{file.name}</span><button aria-label={`Убрать ${file.name}`} onClick={() => setSelectedFiles((previous) => previous.filter((_, fileIndex) => fileIndex !== index))}><X size={16} /></button></div>)}</div>}
+          {selectedFiles.length > 0 && <div className="create-file-list" aria-label="Выбранные файлы">{selectedFiles.map((file, index) => <div className="create-file-row" key={`${file.name}-${index}`}><div className="create-file-heading"><span title={file.name}>{file.name}</span><button aria-label={`Убрать ${file.name}`} disabled={uploading} onClick={() => { setSelectedFiles((previous) => previous.filter((_, fileIndex) => fileIndex !== index)); setTranscribeFlags((previous) => previous.filter((_, fileIndex) => fileIndex !== index)); }}><X size={16} /></button></div>{createMode === "document-upload" && isMediaFile(file) && <button className="create-transcribe-switch" role="switch" aria-checked={!!transcribeFlags[index]} aria-label={`Расшифровать ${file.name}`} disabled={uploading} onClick={() => setTranscribeFlags((previous) => previous.map((value, flagIndex) => flagIndex === index ? !value : value))}><span className={`create-switch-track ${transcribeFlags[index] ? "on" : ""}`} aria-hidden="true"><span /></span>Расшифровать</button>}</div>)}</div>}
         </> : <label className="create-field">{createMode === "link" ? "Ссылка на запись" : "Название документа"}<Input value={newTitle} onChange={(event) => { setNewTitle(event.target.value); setCreateError(""); }} placeholder={createMode === "link" ? "https://…" : "Например, решения по запуску"} /></label>}
         {createError && <p className="create-error" role="alert">{createError}</p>}
-        {(createMode !== "document-upload" || selectedFiles.length > 0) && <div className="dialog-actions"><Button variant="ghost" onClick={() => setCreateOpen(false)}>Отмена</Button><Button onClick={() => void addMaterial()}>{createMode === "note" ? "Создать документ" : createMode === "document-upload" ? "Загрузить файлы" : "Добавить запись"}</Button></div>}
+        {(createMode !== "document-upload" || selectedFiles.length > 0) && <div className="dialog-actions"><Button variant="ghost" disabled={uploading} onClick={() => setCreateOpen(false)}>Отмена</Button><Button disabled={uploading} onClick={() => void addMaterial()}>{uploading ? "Загружаем…" : createMode === "note" ? "Создать документ" : createMode === "document-upload" ? "Загрузить файлы" : "Добавить запись"}</Button></div>}
       </DialogContent>
     </Dialog>
 

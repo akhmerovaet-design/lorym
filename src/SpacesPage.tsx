@@ -6,7 +6,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SpaceDot } from "@/SpaceDot";
-import { SPACE_COLORS, defaultSpaceColor, type SpaceColor } from "@/spaceColors";
+import { SpaceSettingsDrawer } from "@/SpaceSettingsDrawer";
+import { defaultSpaceColor, type SpaceColor } from "@/spaceColors";
 import { searchableMaterialText } from "@/materialSearch";
 import type { Material } from "@/model";
 
@@ -49,9 +50,7 @@ export function SpacesPage({ spaces, trashedSpaces, materials, onOpen, onOpenMat
   const [createOpen, setCreateOpen] = useState(createFromSidebar);
   const [trashTarget, setTrashTarget] = useState<string | null>(null);
   const [deleteForeverTarget, setDeleteForeverTarget] = useState<string | null>(null);
-  const [renameTarget, setRenameTarget] = useState<string | null>(null);
-  const [renameDraft, setRenameDraft] = useState("");
-  const [renameError, setRenameError] = useState("");
+  const [settingsTarget, setSettingsTarget] = useState<string | null>(null);
   const [actionStatus, setActionStatus] = useState("");
   const [shareTarget, setShareTarget] = useState<string | null>(null);
   const [shareCopied, setShareCopied] = useState(false);
@@ -72,6 +71,7 @@ export function SpacesPage({ spaces, trashedSpaces, materials, onOpen, onOpenMat
   const foundMaterials = searchTerm ? materials.filter((item) => spaces.some((space) => space.name === item.space) && `${item.space} ${searchableMaterialText(item)}`.includes(searchTerm)) : [];
   const shareUrl = shareTarget ? `${window.location.origin}${window.location.pathname}?space=${encodeURIComponent(shareTarget)}` : "";
   const sharedSpace = spaces.find((item) => item.name === shareTarget);
+  const settingsSpace = spaces.find((item) => item.name === settingsTarget);
   const knownOrganizations = Array.from(new Set(spaces.map((item) => item.organization).filter((value): value is string => !!value)));
 
   function startCreate() {
@@ -98,19 +98,6 @@ export function SpacesPage({ spaces, trashedSpaces, materials, onOpen, onOpenMat
     if (!trashTarget) return;
     onTrash(trashTarget);
     setTrashTarget(null);
-  }
-  function startRename(space: SpaceInfo) {
-    setRenameTarget(space.name);
-    setRenameDraft(space.name);
-    setRenameError("");
-  }
-  function saveRename() {
-    if (!renameTarget) return;
-    const nextName = renameDraft.trim();
-    if (!nextName) { setRenameError("Введите название пространства"); return; }
-    if ([...spaces, ...trashedSpaces].some((item) => item.name !== renameTarget && item.name.toLocaleLowerCase("ru") === nextName.toLocaleLowerCase("ru"))) { setRenameError("Такое пространство уже есть"); return; }
-    if (nextName !== renameTarget) onRename(renameTarget, nextName);
-    setRenameTarget(null);
   }
   function spaceUrl(name: string) {
     return `${window.location.origin}${window.location.pathname}?space=${encodeURIComponent(name)}`;
@@ -204,8 +191,7 @@ export function SpacesPage({ spaces, trashedSpaces, materials, onOpen, onOpenMat
             <div className="space-card-title"><SpaceDot name={item.name} color={item.color} decorative /><h2>{item.name}</h2>{item.starred && <Star className="space-card-star" size={15} fill="currentColor" aria-label="В избранном" />}{item.access === "view" && <Tooltip><TooltipTrigger asChild><span className="space-access" tabIndex={0} role="img" aria-label="Доступ только на просмотр"><Eye size={17} strokeWidth={1.7} /></span></TooltipTrigger><TooltipContent side="top">Только просмотр</TooltipContent></Tooltip>}</div>
             <div className="space-card-actions"><span className="space-open">Открыть <ArrowRight size={17} /></span>{item.access === "edit" && <DropdownMenu><DropdownMenuTrigger asChild><button className="space-more" aria-label={`Действия с пространством «${item.name}»`}><MoreHorizontal size={19} /></button></DropdownMenuTrigger><DropdownMenuContent align="end" className="space-menu">
               <DropdownMenuItem onClick={() => onDownload(item.name)}><Download size={16} />Скачать</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => startRename(item)}><Pencil size={16} />Переименовать</DropdownMenuItem>
-              <DropdownMenuSub><DropdownMenuSubTrigger><SpaceDot name={item.name} color={item.color} decorative />Цвет пространства</DropdownMenuSubTrigger><DropdownMenuSubContent className="space-menu">{SPACE_COLORS.map((option) => <DropdownMenuItem key={option.id} onSelect={() => onUpdate({ ...item, color: option.id })}><SpaceDot name={item.name} color={option.id} decorative />{option.name}{(item.color ?? defaultSpaceColor(item.name)) === option.id && <Check size={15} className="space-color-check" />}</DropdownMenuItem>)}</DropdownMenuSubContent></DropdownMenuSub>
+              <DropdownMenuItem onClick={() => setSettingsTarget(item.name)}><Pencil size={16} />Редактировать</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuSub><DropdownMenuSubTrigger><UserRoundPlus size={16} />Поделиться</DropdownMenuSubTrigger><DropdownMenuSubContent className="space-menu"><DropdownMenuItem onClick={() => openShare(item)}><UserRoundPlus size={16} />Поделиться</DropdownMenuItem><DropdownMenuItem onClick={() => void copyLink(item.name)}><Link2 size={16} />Копировать ссылку</DropdownMenuItem></DropdownMenuSubContent></DropdownMenuSub>
               <DropdownMenuSub><DropdownMenuSubTrigger><FolderOpen size={16} />Упорядочить</DropdownMenuSubTrigger><DropdownMenuSubContent className="space-menu"><DropdownMenuItem onClick={() => onUpdate({ ...item, starred: !item.starred })}><Star size={16} />{item.starred ? "Убрать из избранного" : "Добавить в избранное"}</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem disabled={spaces[0]?.name === item.name} onClick={() => onMove(item.name, -1)}>Поднять выше</DropdownMenuItem><DropdownMenuItem disabled={spaces.at(-1)?.name === item.name} onClick={() => onMove(item.name, 1)}>Опустить ниже</DropdownMenuItem></DropdownMenuSubContent></DropdownMenuSub>
@@ -245,7 +231,7 @@ export function SpacesPage({ spaces, trashedSpaces, materials, onOpen, onOpenMat
       </DialogContent>
     </Dialog>
 
-    <Dialog open={!!renameTarget} onOpenChange={(open) => { if (!open) setRenameTarget(null); }}><DialogContent className="lorym-dialog space-rename-dialog"><DialogHeader><DialogTitle>Переименовать пространство</DialogTitle><DialogDescription>Новое название появится в материалах и навигации.</DialogDescription></DialogHeader><label>Название<Input value={renameDraft} onChange={(event) => { setRenameDraft(event.target.value); setRenameError(""); }} onKeyDown={(event) => { if (event.key === "Enter") saveRename(); }} autoFocus /></label>{renameError && <p className="form-error" role="alert">{renameError}</p>}<div className="dialog-actions"><Button variant="ghost" onClick={() => setRenameTarget(null)}>Отмена</Button><Button onClick={saveRename}>Сохранить</Button></div></DialogContent></Dialog>
+    {settingsSpace && <SpaceSettingsDrawer space={settingsSpace} spaceNames={[...spaces, ...trashedSpaces].map((item) => item.name)} onClose={() => setSettingsTarget(null)} onSave={(next, oldName) => { onUpdate({ ...next, name: oldName }); if (next.name !== oldName) onRename(oldName, next.name); }} />}
 
     <Dialog open={!!trashTarget} onOpenChange={(open) => { if (!open) setTrashTarget(null); }}><DialogContent className="lorym-dialog space-trash-dialog"><DialogHeader><DialogTitle>В корзину — «{trashTarget}»?</DialogTitle><DialogDescription>Пространство исчезнет из навигации. Его можно восстановить на странице пространств.</DialogDescription></DialogHeader><div className="dialog-actions"><Button variant="ghost" onClick={() => setTrashTarget(null)}>Отмена</Button><Button onClick={confirmTrash}>В корзину</Button></div></DialogContent></Dialog>
 
